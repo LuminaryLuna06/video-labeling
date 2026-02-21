@@ -185,7 +185,7 @@
       <div class="node-icon" [style.background]="getTypeColor(node.type) + '22'" [style.color]="getTypeColor(node.type)">
         <mat-icon>{{ getTypeIcon(node.type) }}</mat-icon>
       </div>
-      <div class="node-info">
+      <div class="node-info" (click)="toggleNode(node)">
         <div class="node-title">
           <span class="name">{{ node.name }}</span>
           <span class="id">{{ node.id }}</span>
