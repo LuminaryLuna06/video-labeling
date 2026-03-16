@@ -2,21 +2,25 @@
 <nav class="navbar">
   <div class="nav-left">
     <div class="nav-logo">
-      <mat-icon>videocam</mat-icon>
-      <span>AIRC Video Annotator</span>
+      <mat-icon>auto_awesome</mat-icon>
+      <span>AIRC Annotator</span>
     </div>
     <div class="nav-links">
-      <a class="nav-link active">
+      <a class="nav-link" routerLink="/dashboard" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
         <mat-icon>folder</mat-icon>
         <span>Projects</span>
       </a>
-      <a class="nav-link" routerLink="/qc-dashboard">
+      <a class="nav-link" routerLink="/qc-dashboard" routerLinkActive="active">
         <mat-icon>verified</mat-icon>
         <span>Quality Control</span>
       </a>
-      <a class="nav-link" routerLink="/knowledge-base">
+      <a class="nav-link" routerLink="/knowledge-base" routerLinkActive="active">
         <mat-icon>psychology</mat-icon>
         <span>Knowledge Base</span>
+      </a>
+      <a class="nav-link" routerLink="/video-demo" routerLinkActive="active">
+        <mat-icon>smart_display</mat-icon>
+        <span>Video Demo</span>
       </a>
     </div>
   </div>
@@ -46,7 +50,7 @@
   <div class="page-header">
     <div>
       <h1>My Projects</h1>
-      <p>Manage your video annotation projects</p>
+      <p>Manage your video and image annotation projects</p>
     </div>
     <button mat-raised-button class="create-btn" (click)="showCreateDialog = true">
       <mat-icon>add</mat-icon>
@@ -64,7 +68,15 @@
     <div *ngFor="let project of projects" class="project-card" (click)="openProject(project)">
       <div class="card-header">
         <div class="card-icon" [style.background]="getProjectColor(project)">
-          <mat-icon>folder</mat-icon>
+          <mat-icon>{{ project.project_type === 'image' ? getTaskIcon(project.task_type) : 'videocam' }}</mat-icon>
+        </div>
+        <div class="card-badges">
+          <span class="project-type-badge" [class]="project.project_type || 'video'">
+            {{ project.project_type === 'image' ? 'Image' : 'Video' }}
+          </span>
+          <span class="task-type-badge" *ngIf="project.project_type === 'image' && project.task_type">
+            {{ getTaskLabel(project.task_type) }}
+          </span>
         </div>
         <button mat-icon-button [matMenuTriggerFor]="projectMenu" (click)="$event.stopPropagation()">
           <mat-icon>more_vert</mat-icon>
@@ -87,9 +99,13 @@
           <mat-icon>segment</mat-icon>
           <span>{{ project.subpart_count || 0 }} parts</span>
         </div>
-        <div class="stat">
+        <div class="stat" *ngIf="project.project_type !== 'image'">
           <mat-icon>movie</mat-icon>
           <span>{{ project.video_count || 0 }} videos</span>
+        </div>
+        <div class="stat" *ngIf="project.project_type === 'image'">
+          <mat-icon>photo</mat-icon>
+          <span>{{ project.image_count || 0 }} images</span>
         </div>
       </div>
       <div class="card-footer">
@@ -115,6 +131,39 @@
 <div class="dialog-overlay" *ngIf="showCreateDialog" (click)="showCreateDialog = false">
   <div class="dialog-card" (click)="$event.stopPropagation()">
     <h2>Create New Project</h2>
+    
+    <div class="project-type-selector">
+      <label>Project Type</label>
+      <div class="type-options">
+        <div class="type-option" [class.selected]="newProjectType === 'video'" (click)="newProjectType = 'video'">
+          <mat-icon>videocam</mat-icon>
+          <span>Video</span>
+          <p>Annotate videos with temporal segmentation, object masking, and captioning</p>
+        </div>
+        <div class="type-option" [class.selected]="newProjectType === 'image'" (click)="newProjectType = 'image'">
+          <mat-icon>photo_library</mat-icon>
+          <span>Image</span>
+          <p>Annotate images with a specific annotation task</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Task Type Selector (only for Image projects) -->
+    <div class="task-type-selector" *ngIf="newProjectType === 'image'">
+      <label>Annotation Task</label>
+      <div class="task-options">
+        <div class="task-option" *ngFor="let task of taskTypes" 
+             [class.selected]="newTaskType === task.value" 
+             (click)="newTaskType = task.value">
+          <mat-icon>{{ task.icon }}</mat-icon>
+          <div class="task-info">
+            <span class="task-label">{{ task.label }}</span>
+            <p>{{ task.desc }}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <mat-form-field appearance="outline">
       <mat-label>Project Name</mat-label>
       <input matInput [(ngModel)]="newProjectName" placeholder="Enter project name">

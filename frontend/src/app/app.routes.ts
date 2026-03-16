@@ -31,8 +31,16 @@ export const routes: Routes = [
         loadComponent: () => import('./pages/video-editor/video-editor.component').then(m => m.VideoEditorComponent)
       },
       {
+        path: 'image-editor/:imageId',
+        loadComponent: () => import('./pages/image-editor/image-editor.component').then(m => m.ImageEditorComponent)
+      },
+      {
         path: 'knowledge-base',
         loadComponent: () => import('./knowledge-base/knowledge-base.component').then(m => m.KnowledgeBaseComponent)
+      },
+      {
+        path: 'video-demo',
+        loadComponent: () => import('./pages/video-demo/video-demo.component').then(m => m.VideoDemoComponent)
       },
       {
         path: '',

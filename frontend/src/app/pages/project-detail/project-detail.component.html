@@ -138,9 +138,13 @@
           <span class="no-users">No reviewers assigned</span>
         </div>
         <div class="sp-footer">
-          <div class="sp-stat">
+          <div class="sp-stat" *ngIf="!isImageProject()">
             <mat-icon>movie</mat-icon>
             <span>{{ sp.video_count || 0 }} videos</span>
+          </div>
+          <div class="sp-stat" *ngIf="isImageProject()">
+            <mat-icon>image</mat-icon>
+            <span>{{ sp.image_count || 0 }} images</span>
           </div>
           <mat-icon class="sp-arrow">arrow_forward</mat-icon>
         </div>
@@ -148,7 +152,7 @@
 
       <div *ngIf="!project.subparts?.length" class="empty-section">
         <mat-icon>dashboard_customize</mat-icon>
-        <p>No sub parts yet. Create one to start organizing videos.</p>
+        <p>No sub parts yet. Create one to start organizing {{ isImageProject() ? 'images' : 'videos' }}.</p>
         <button mat-raised-button class="primary-btn" (click)="showSubpartDialog = true">
           <mat-icon>add</mat-icon> Create Sub Part
         </button>
@@ -178,8 +182,8 @@
     </div>
   </div>
 
-  <!-- ========== SUBPART VIDEOS VIEW ========== -->
-  <div *ngIf="selectedSubpart" class="videos-view">
+  <!-- ========== SUBPART VIDEOS VIEW (Video Projects) ========== -->
+  <div *ngIf="selectedSubpart && !isImageProject()" class="videos-view">
     <div class="section-header">
       <div class="section-title-group">
         <h3>{{ selectedSubpart.name }}</h3>
@@ -190,7 +194,7 @@
         <button mat-raised-button class="primary-btn" (click)="triggerUpload()">
           <mat-icon>cloud_upload</mat-icon> Upload Video
         </button>
-        <input type="file" #fileInput accept="video/*" (change)="onFileSelected($event)" style="display:none" multiple>
+        <input type="file" id="videoInput" accept="video/*" (change)="onFileSelected($event)" style="display:none" multiple>
       </div>
     </div>
 
@@ -409,6 +413,240 @@
         <mat-icon>last_page</mat-icon>
       </button>
       <span class="page-size-label">{{ filteredVideos.length }} total</span>
+    </div>
+  </div>
+
+  <!-- ========== SUBPART IMAGES VIEW (Image Projects) ========== -->
+  <div *ngIf="selectedSubpart && isImageProject()" class="images-view">
+    <div class="section-header">
+      <div class="section-title-group">
+        <h3>{{ selectedSubpart.name }}</h3>
+        <span class="video-count-badge" *ngIf="imageFilter === 'all'">{{ subpartImages.length }} images</span>
+        <span class="video-count-badge" *ngIf="imageFilter !== 'all'">{{ filteredImages.length }} / {{ subpartImages.length }} images</span>
+      </div>
+      <div class="header-actions">
+        <button
+          mat-stroked-button
+          class="index-project-btn"
+          (click)="indexSubpartImages(true)"
+          [disabled]="indexingImages || !getPendingIndexImages().length"
+          matTooltip="Index images that are not fully indexed">
+          <mat-icon>hub</mat-icon> Index Pending
+        </button>
+        <button mat-raised-button class="primary-btn" (click)="triggerUpload()">
+          <mat-icon>cloud_upload</mat-icon> Upload Images
+        </button>
+        <input type="file" id="imageInput" accept="image/*" (change)="onFileSelected($event)" style="display:none" multiple>
+      </div>
+    </div>
+
+    <div class="index-progress" *ngIf="indexingImages || imageIndexSummary">
+      <div class="progress-content">
+        <div class="progress-info">
+          <span class="progress-text" *ngIf="indexingImages">Indexing images to vector DB...</span>
+          <span class="progress-text" *ngIf="!indexingImages && imageIndexSummary">{{ imageIndexSummary }}</span>
+          <span class="progress-count">
+            {{ imageIndexCurrent }}/{{ imageIndexTotal }}
+            <span *ngIf="subpartImages.length"> | Pending: {{ getPendingIndexImages().length }}</span>
+          </span>
+        </div>
+        <mat-progress-bar mode="determinate" [value]="indexingImages ? imageIndexProgress : 100"></mat-progress-bar>
+      </div>
+    </div>
+
+    <!-- Upload Progress -->
+    <div *ngIf="uploading" class="upload-progress">
+      <div class="progress-content">
+        <div class="progress-info">
+          <span class="progress-text">Uploading: {{ uploadCurrentFile }}</span>
+          <span class="progress-count">{{ uploadProgress }}% ({{ Math.round(uploadProgress / 100 * uploadTotalFiles) }}/{{ uploadTotalFiles }})</span>
+        </div>
+        <mat-progress-bar mode="determinate" [value]="uploadProgress"></mat-progress-bar>
+      </div>
+    </div>
+
+    <!-- Stats Summary -->
+    <div *ngIf="subpartImages.length" class="stats-summary">
+      <div class="stat-item">
+        <mat-icon>image</mat-icon>
+        <div class="stat-text">
+          <span class="stat-value">{{ subpartImages.length }}</span>
+          <span class="stat-label">Images</span>
+        </div>
+      </div>
+      <div class="stat-item">
+        <mat-icon>crop_free</mat-icon>
+        <div class="stat-text">
+          <span class="stat-value">{{ getTotalImageRegions() }}</span>
+          <span class="stat-label">Regions</span>
+        </div>
+      </div>
+      <div class="stat-item">
+        <mat-icon>subtitles</mat-icon>
+        <div class="stat-text">
+          <span class="stat-value">{{ getTotalImageCaptions() }}</span>
+          <span class="stat-label">Captions</span>
+        </div>
+      </div>
+      <div class="stat-item">
+        <mat-icon>quiz</mat-icon>
+        <div class="stat-text">
+          <span class="stat-value">{{ getTotalImageQA() }}</span>
+          <span class="stat-label">QA Pairs</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Image Filters -->
+    <div class="filter-bar" *ngIf="subpartImages.length > 0">
+      <button class="filter-chip" [class.active]="imageFilter === 'all'" (click)="setImageFilter('all')">
+        All <span class="filter-count">{{ subpartImages.length }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="imageFilter === 'not_submitted'" (click)="setImageFilter('not_submitted')">
+        <mat-icon class="filter-icon">radio_button_unchecked</mat-icon> Not Submitted
+        <span class="filter-count">{{ getImageCountByStatus('not_submitted') }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="imageFilter === 'pending_review'" (click)="setImageFilter('pending_review')">
+        <mat-icon class="filter-icon">hourglass_empty</mat-icon> Pending
+        <span class="filter-count">{{ getImageCountByStatus('pending_review') }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="imageFilter === 'approved'" (click)="setImageFilter('approved')">
+        <mat-icon class="filter-icon">check_circle</mat-icon> Approved
+        <span class="filter-count">{{ getImageCountByStatus('approved') }}</span>
+      </button>
+      <button class="filter-chip" [class.active]="imageFilter === 'rejected'" (click)="setImageFilter('rejected')">
+        <mat-icon class="filter-icon">cancel</mat-icon> Rejected
+        <span class="filter-count">{{ getImageCountByStatus('rejected') }}</span>
+      </button>
+    </div>
+
+    <div class="images-grid">
+      <div *ngFor="let image of paginatedImages" class="image-card" (click)="openImageEditor(image)">
+        <div class="image-thumb">
+          <img [src]="image.url" alt="thumbnail" class="thumb-img">
+          <div class="thumb-overlay">
+            <mat-icon>edit</mat-icon>
+          </div>
+          <div class="image-size">{{ formatImageSize(image.file_size || 0) }}</div>
+        </div>
+        <div class="image-info">
+          <h4 [matTooltip]="image.original_name">{{ image.original_name }}</h4>
+          <div class="image-dimensions" *ngIf="image.width && image.height">
+            {{ image.width }} × {{ image.height }}
+          </div>
+          <div class="index-status-row">
+            <span class="index-badge" [class.ok]="!!image.indexed">
+              <mat-icon>image</mat-icon>
+              {{ image.indexed ? 'Image indexed' : 'Image not indexed' }}
+            </span>
+            <span
+              class="index-badge"
+              [class.ok]="(image.regions_count || 0) > 0 && (image.object_indexed_count || 0) >= (image.regions_count || 0)">
+              <mat-icon>category</mat-icon>
+              Objects {{ image.object_indexed_count || 0 }}/{{ image.regions_count || 0 }} indexed
+            </span>
+          </div>
+          <div class="image-stats">
+            <div class="stat-row">
+              <div class="mini-stat" [class.ok]="(image.regions_count || 0) > 0"
+                   [matTooltip]="(image.regions_count || 0) + ' regions'">
+                <mat-icon>crop_free</mat-icon>
+                <span>{{ image.regions_count || 0 }}</span>
+              </div>
+              <div class="mini-stat"
+                   [class.ok]="(image.captions_count || 0) > 0"
+                   [class.warn]="(image.regions_count || 0) > 0 && (image.captions_count || 0) < (image.regions_count || 0)"
+                   [matTooltip]="getImageCaptionTooltip(image)">
+                <mat-icon>subtitles</mat-icon>
+                <span>{{ image.captions_count || 0 }}<span *ngIf="(image.regions_count || 0) > 0">/{{ image.regions_count }}</span></span>
+              </div>
+              <div class="mini-stat" [class.ok]="(image.qa_count || 0) > 0"
+                   [matTooltip]="(image.qa_count || 0) + ' QA pairs'">
+                <mat-icon>quiz</mat-icon>
+                <span>{{ image.qa_count || 0 }}</span>
+              </div>
+            </div>
+            <div class="annotation-bar">
+              <div class="bar-fill" [style.width.%]="getImageAnnotationProgress(image)"
+                   [class.complete]="getImageAnnotationProgress(image) === 100"
+                   [class.partial]="getImageAnnotationProgress(image) > 0 && getImageAnnotationProgress(image) < 100">
+              </div>
+            </div>
+          </div>
+          <div class="image-footer">
+            <div class="step-indicator">
+              <div class="step" [class.active]="image.current_step >= 1" [class.completed]="image.current_step > 1"
+                   matTooltip="Object Detection">1</div>
+              <div class="step-line" [class.completed]="image.current_step > 1"></div>
+              <div class="step" [class.active]="image.current_step >= 2" [class.completed]="image.current_step > 2"
+                   matTooltip="Classification">2</div>
+              <div class="step-line" [class.completed]="image.current_step > 2"></div>
+              <div class="step" [class.active]="image.current_step >= 3" [class.completed]="image.current_step > 3"
+                   matTooltip="Captioning">3</div>
+              <div class="step-line" [class.completed]="image.current_step > 3"></div>
+              <div class="step" [class.active]="image.current_step >= 4" [class.completed]="image.current_step > 4"
+                   matTooltip="QA">4</div>
+            </div>
+            <div class="image-actions-row">
+              <button
+                mat-icon-button
+                (click)="indexSingleImage(image, $event)"
+                [disabled]="indexingImages"
+                matTooltip="Index this image and its objects">
+                <mat-icon>hub</mat-icon>
+              </button>
+              <button mat-icon-button (click)="deleteImage(image); $event.stopPropagation()"
+                      matTooltip="Delete image">
+                <mat-icon>delete</mat-icon>
+              </button>
+            </div>
+          </div>
+          <!-- Review Status Bar -->
+          <div class="review-bar" *ngIf="selectedSubpart?.reviewer">
+            <div class="review-status-row">
+              <span class="review-badge" [class]="image.review_status || 'not_submitted'">
+                <mat-icon>{{ getReviewIcon(image.review_status) }}</mat-icon>
+                {{ getReviewLabel(image.review_status) }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div *ngIf="subpartImages.length === 0 && !loadingImages" class="empty-section">
+        <mat-icon>image</mat-icon>
+        <p>No images in this sub part yet.</p>
+        <button mat-raised-button class="primary-btn" (click)="triggerUpload()">
+          <mat-icon>cloud_upload</mat-icon> Upload Images
+        </button>
+      </div>
+
+      <div *ngIf="subpartImages.length > 0 && !filteredImages.length" class="empty-section">
+        <mat-icon>filter_list_off</mat-icon>
+        <p>No images match the selected filter.</p>
+      </div>
+
+      <div *ngIf="loadingImages" class="empty-section">
+        <mat-spinner diameter="36"></mat-spinner>
+      </div>
+    </div>
+
+    <!-- Image Pagination -->
+    <div class="pagination-bar" *ngIf="imageTotalPages > 1">
+      <button mat-icon-button [disabled]="imagePage <= 1" (click)="imagePage = 1">
+        <mat-icon>first_page</mat-icon>
+      </button>
+      <button mat-icon-button [disabled]="imagePage <= 1" (click)="imagePage = imagePage - 1">
+        <mat-icon>chevron_left</mat-icon>
+      </button>
+      <span class="page-info">Page {{ imagePage }} of {{ imageTotalPages }}</span>
+      <button mat-icon-button [disabled]="imagePage >= imageTotalPages" (click)="imagePage = imagePage + 1">
+        <mat-icon>chevron_right</mat-icon>
+      </button>
+      <button mat-icon-button [disabled]="imagePage >= imageTotalPages" (click)="imagePage = imageTotalPages">
+        <mat-icon>last_page</mat-icon>
+      </button>
+      <span class="page-size-label">{{ filteredImages.length }} total</span>
     </div>
   </div>
 </div>

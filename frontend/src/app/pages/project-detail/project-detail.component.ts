@@ -20,8 +20,9 @@ import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { AuthService } from '../../core/services/auth.service';
 import { ProjectService } from '../../core/services/project.service';
 import { VideoService } from '../../core/services/video.service';
+import { ImageService } from '../../core/services/image.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
-import { Project, SubPart, VideoItem, User, Tag } from '../../core/models';
+import { Project, SubPart, VideoItem, ImageItem, User, Tag } from '../../core/models';
 
 @Component({
   selector: 'app-project-detail',
@@ -40,9 +41,11 @@ export class ProjectDetailComponent implements OnInit {
   Math = Math;
   project: Project | null = null;
   subpartVideos: VideoItem[] = [];
+  subpartImages: ImageItem[] = [];
   allUsers: User[] = [];
   uploading = false;
   loadingVideos = false;
+  loadingImages = false;
   uploadProgress = 0;
   uploadCurrentFile = '';
   uploadTotalFiles = 0;
@@ -104,12 +107,23 @@ export class ProjectDetailComponent implements OnInit {
   videoPage = 1;
   videoPageSize = 12;
 
+  // Image filter & pagination
+  imageFilter = 'all';
+  imagePage = 1;
+  imagePageSize = 12;
+  indexingImages = false;
+  imageIndexProgress = 0;
+  imageIndexCurrent = 0;
+  imageIndexTotal = 0;
+  imageIndexSummary = '';
+
   constructor(
     private route: ActivatedRoute,
     private router: Router,
     private authService: AuthService,
     private projectService: ProjectService,
     private videoService: VideoService,
+    private imageService: ImageService,
     private dialog: MatDialog,
     private snackBar: MatSnackBar
   ) {}
@@ -169,6 +183,48 @@ export class ProjectDetailComponent implements OnInit {
     return this.subpartVideos.filter(v => (v.review_status || 'not_submitted') === status).length;
   }
 
+  // ---- Image Filter & Pagination ----
+  get filteredImages(): ImageItem[] {
+    if (this.imageFilter === 'all') return this.subpartImages;
+    return this.subpartImages.filter(img => (img.review_status || 'not_submitted') === this.imageFilter);
+  }
+
+  get paginatedImages(): ImageItem[] {
+    const start = (this.imagePage - 1) * this.imagePageSize;
+    return this.filteredImages.slice(start, start + this.imagePageSize);
+  }
+
+  get imageTotalPages(): number {
+    return Math.ceil(this.filteredImages.length / this.imagePageSize) || 1;
+  }
+
+  setImageFilter(filter: string): void {
+    this.imageFilter = filter;
+    this.imagePage = 1;
+  }
+
+  getImageCountByStatus(status: string): number {
+    return this.subpartImages.filter(img => (img.review_status || 'not_submitted') === status).length;
+  }
+
+  isImageFullyIndexed(image: ImageItem): boolean {
+    const regions = image.regions_count || 0;
+    const objectIndexed = image.object_indexed_count || 0;
+    const imageIndexed = !!image.indexed;
+    return imageIndexed && (regions === 0 || objectIndexed >= regions);
+  }
+
+  getPendingIndexImages(): ImageItem[] {
+    // Pending in toolbar means image-level index not done yet.
+    // Object-level index status is shown separately per image as x/y.
+    return this.subpartImages.filter((img) => !img.indexed);
+  }
+
+  // Helper to check project type
+  isImageProject(): boolean {
+    return this.project?.project_type === 'image';
+  }
+
   loadProject(id: string): void {
     this.projectService.getProject(id).subscribe({
       next: (p) => {
@@ -195,7 +251,13 @@ export class ProjectDetailComponent implements OnInit {
     this.selectedSubpart = sp;
     this.videoFilter = 'all';
     this.videoPage = 1;
-    this.loadSubpartVideos(sp.id);
+    this.imageFilter = 'all';
+    this.imagePage = 1;
+    if (this.isImageProject()) {
+      this.loadSubpartImages(sp.id);
+    } else {
+      this.loadSubpartVideos(sp.id);
+    }
   }
 
   loadSubpartVideos(subpartId: string): void {
@@ -207,6 +269,19 @@ export class ProjectDetailComponent implements OnInit {
       },
       error: () => {
         this.loadingVideos = false;
+      }
+    });
+  }
+
+  loadSubpartImages(subpartId: string): void {
+    this.loadingImages = true;
+    this.imageService.getSubpartImages(subpartId).subscribe({
+      next: (images) => {
+        this.subpartImages = images;
+        this.loadingImages = false;
+      },
+      error: () => {
+        this.loadingImages = false;
       }
     });
   }
@@ -264,11 +339,20 @@ export class ProjectDetailComponent implements OnInit {
   }
 
   triggerUpload(): void {
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const inputId = this.isImageProject() ? 'imageInput' : 'videoInput';
+    const input = document.getElementById(inputId) as HTMLInputElement;
     input?.click();
   }
 
   onFileSelected(event: Event): void {
+    if (this.isImageProject()) {
+      this.onImageFileSelected(event);
+    } else {
+      this.onVideoFileSelected(event);
+    }
+  }
+
+  onVideoFileSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
     if (!input.files?.length || !this.project || !this.selectedSubpart) return;
 
@@ -358,6 +442,169 @@ export class ProjectDetailComponent implements OnInit {
     });
   }
 
+  // ---- Image Upload ----
+  onImageFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (!input.files?.length || !this.project || !this.selectedSubpart) return;
+
+    this.uploading = true;
+    const files = Array.from(input.files);
+    this.uploadTotalFiles = files.length;
+    let uploadedCount = 0;
+    let failedCount = 0;
+
+    const uploadNext = (index: number) => {
+      if (index >= files.length) {
+        this.uploading = false;
+        this.uploadProgress = 0;
+        this.uploadCurrentFile = '';
+        this.uploadTotalFiles = 0;
+        
+        this.loadSubpartImages(this.selectedSubpart!.id);
+        input.value = '';
+        
+        if (uploadedCount > 0 && failedCount === 0) {
+          this.snackBar.open(`${uploadedCount} image${uploadedCount > 1 ? 's' : ''} uploaded!`, 'Close', { duration: 2000, panelClass: 'snack-success' });
+        } else if (uploadedCount > 0 && failedCount > 0) {
+          this.snackBar.open(`Uploaded ${uploadedCount}, failed ${failedCount}`, 'Close', { duration: 3000, panelClass: 'snack-warn' });
+        } else if (failedCount > 0) {
+          this.snackBar.open(`Upload failed for ${failedCount} file${failedCount > 1 ? 's' : ''}`, 'Close', { duration: 3000, panelClass: 'snack-error' });
+        }
+        return;
+      }
+
+      const file = files[index];
+      this.uploadCurrentFile = file.name;
+      this.uploadProgress = Math.round(((index) / files.length) * 100);
+
+      this.imageService.uploadImage(this.project!.id, file, this.selectedSubpart!.id).subscribe({
+        next: () => {
+          uploadedCount++;
+          this.uploadProgress = Math.round(((index + 1) / files.length) * 100);
+          uploadNext(index + 1);
+        },
+        error: () => {
+          failedCount++;
+          this.uploadProgress = Math.round(((index + 1) / files.length) * 100);
+          uploadNext(index + 1);
+        }
+      });
+    };
+
+    uploadNext(0);
+  }
+
+  deleteImage(image: ImageItem): void {
+    if (!confirm(`Delete "${image.original_name}"?`)) return;
+    this.imageService.deleteImage(image.id).subscribe({
+      next: () => {
+        if (this.selectedSubpart) {
+          this.loadSubpartImages(this.selectedSubpart.id);
+          this.loadProject(this.project!.id);
+        }
+        this.snackBar.open('Image deleted', 'Close', { duration: 2000, panelClass: 'snack-success' });
+      }
+    });
+  }
+
+  indexSingleImage(image: ImageItem, event?: Event): void {
+    event?.stopPropagation();
+    if (this.indexingImages) return;
+
+    this.imageService.indexImage(image.id).subscribe({
+      next: () => {
+        this.snackBar.open(`Indexed ${image.original_name}`, 'Close', { duration: 2000, panelClass: 'snack-success' });
+        if (this.selectedSubpart) {
+          this.loadSubpartImages(this.selectedSubpart.id);
+        }
+      },
+      error: () => {
+        this.snackBar.open(`Failed to index ${image.original_name}`, 'Close', { duration: 3000, panelClass: 'snack-error' });
+      }
+    });
+  }
+
+  indexSubpartImages(onlyPending = true): void {
+    if (this.indexingImages) return;
+    const targets = (onlyPending ? this.getPendingIndexImages() : this.subpartImages).map(i => i.id);
+
+    if (!targets.length) {
+      this.snackBar.open('All images are already indexed', 'Close', { duration: 2000, panelClass: 'snack-success' });
+      return;
+    }
+
+    this.indexingImages = true;
+    this.imageIndexSummary = '';
+    this.imageIndexProgress = 0;
+    this.imageIndexCurrent = 0;
+    this.imageIndexTotal = targets.length;
+
+    this.imageService.indexImagesBatch(targets).subscribe({
+      next: (res) => {
+        const successCount = res?.success_count || 0;
+        const total = res?.total || targets.length;
+        this.imageIndexCurrent = total;
+        this.imageIndexProgress = 100;
+        this.imageIndexSummary = `Indexed ${successCount}/${total} images`;
+        if (this.selectedSubpart) {
+          this.loadSubpartImages(this.selectedSubpart.id);
+        }
+        this.snackBar.open(this.imageIndexSummary, 'Close', {
+          duration: 2500,
+          panelClass: successCount === total ? 'snack-success' : 'snack-warn'
+        });
+      },
+      error: () => {
+        this.imageIndexSummary = 'Batch indexing failed';
+        this.snackBar.open(this.imageIndexSummary, 'Close', { duration: 3000, panelClass: 'snack-error' });
+      },
+      complete: () => {
+        this.indexingImages = false;
+      }
+    });
+  }
+
+  openImageEditor(image: ImageItem): void {
+    const queryParams: any = {};
+    if (this.selectedSubpart) queryParams.subpartId = this.selectedSubpart.id;
+    this.router.navigate(['/image-editor', image.id], { queryParams });
+  }
+
+  // ---- Image Stats helpers ----
+  getTotalImageRegions(): number {
+    return this.subpartImages.reduce((sum, img) => sum + (img.regions_count || 0), 0);
+  }
+
+  getTotalImageCaptions(): number {
+    return this.subpartImages.reduce((sum, img) => sum + (img.captions_count || 0), 0);
+  }
+
+  getTotalImageQA(): number {
+    return this.subpartImages.reduce((sum, img) => sum + (img.qa_count || 0), 0);
+  }
+
+  getImageAnnotationProgress(image: ImageItem): number {
+    if (!image.regions_count) return 0;
+    if (!image.captions_count || image.captions_count === 0) return 50;
+    const percent = Math.min(100, Math.round((image.captions_count / image.regions_count) * 100));
+    return percent;
+  }
+
+  getImageCaptionTooltip(image: ImageItem): string {
+    const regions = image.regions_count || 0;
+    const caps = image.captions_count || 0;
+    if (regions === 0) return 'No regions yet';
+    if (caps >= regions) return `All regions captioned (${caps}/${regions})`;
+    return `${caps}/${regions} regions captioned - incomplete`;
+  }
+
+  formatImageSize(bytes: number): string {
+    if (!bytes) return '0 B';
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${sizes[i]}`;
+  }
+
   deleteVideo(video: VideoItem): void {
     if (!confirm(`Delete "${video.original_name}"?`)) return;
     this.videoService.deleteVideo(video.id).subscribe({
@@ -426,6 +673,7 @@ export class ProjectDetailComponent implements OnInit {
     if (this.selectedSubpart) {
       this.selectedSubpart = null;
       this.subpartVideos = [];
+      this.subpartImages = [];
     } else {
       this.router.navigate(['/dashboard']);
     }

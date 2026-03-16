@@ -105,4 +105,54 @@ export class KnowledgeBaseService {
   }> {
     return this.http.post<any>(`${this.apiUrl}/context`, { node_ids: nodeIds });
   }
+
+  // ---- AI Indexing with DINOv2 ----
+  /**
+   * Index a KB node with its representative image
+   */
+  indexNode(nodeId: string, image: string): Observable<{
+    success: boolean;
+    node_id: string;
+    faiss_idx: number;
+    total_indexed: number;
+  }> {
+    return this.http.post<any>(`${this.apiUrl}/${nodeId}/index`, { image });
+  }
+
+  /**
+   * Batch index multiple KB nodes
+   */
+  indexNodesBatch(nodes: { id: string; image: string }[]): Observable<{
+    results: { node_id: string; success: boolean; error?: string }[];
+    total: number;
+    success_count: number;
+  }> {
+    return this.http.post<any>(`${this.apiUrl}/index/batch`, { nodes });
+  }
+
+  /**
+   * Search KB nodes using visual similarity (DINOv2 embeddings)
+   */
+  searchVisual(queryImage: string, options?: {
+    query_mask?: string;
+    top_k?: number;
+    rerank?: boolean;
+  }): Observable<KBVisualSearchResult> {
+    return this.http.post<KBVisualSearchResult>(`${this.apiUrl}/search/visual`, {
+      query_image: queryImage,
+      ...options
+    });
+  }
+}
+
+// ---- Types for Visual Search ----
+export interface KBVisualSearchResult {
+  results: KBSearchMatch[];
+  total: number;
+}
+
+export interface KBSearchMatch {
+  node: KBNode;
+  score: number;
+  ancestors: KBNode[];
 }

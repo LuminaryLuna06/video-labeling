@@ -3,6 +3,7 @@ from flask_cors import CORS
 from pymongo import MongoClient
 from config import Config
 import os
+from utils.vector_store import init_vector_store
 
 
 def create_app():
@@ -15,9 +16,10 @@ def create_app():
     # MongoDB connection
     client = MongoClient(Config.MONGO_URI)
     app.db = client[Config.DB_NAME]
+    init_vector_store(app.db)
 
     # Create upload directories
-    for folder in ['videos', 'thumbnails', 'frames', 'masks']:
+    for folder in ['videos', 'thumbnails', 'frames', 'masks', 'images']:
         os.makedirs(os.path.join(Config.UPLOAD_FOLDER, folder), exist_ok=True)
 
     # Register blueprints
@@ -30,6 +32,7 @@ def create_app():
     from routes.settings import settings_bp
     from routes.categories import categories_bp
     from routes.knowledge_base import knowledge_base_bp
+    from routes.images import images_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(projects_bp, url_prefix='/api/projects')
@@ -40,6 +43,7 @@ def create_app():
     app.register_blueprint(settings_bp, url_prefix='/api/settings')
     app.register_blueprint(categories_bp, url_prefix='/api/categories')
     app.register_blueprint(knowledge_base_bp, url_prefix='/api/knowledge-base')
+    app.register_blueprint(images_bp, url_prefix='/api/images')
 
     # Serve uploaded files
     @app.route('/uploads/<path:filename>')
@@ -56,6 +60,13 @@ def create_app():
     app.db.object_regions.create_index('segment_id')
     app.db.captions.create_index('segment_id')
     app.db.tags.create_index([('project_id', 1), ('name', 1)], unique=True)
+    # Image indexes
+    app.db.images.create_index('project_id')
+    app.db.images.create_index('subpart_id')
+    app.db.image_regions.create_index('image_id')
+    app.db.image_captions.create_index('image_id')
+    app.db.image_captions.create_index('region_id')
+    app.db.image_qa.create_index('image_id')
 
     return app
 

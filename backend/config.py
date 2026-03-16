@@ -14,3 +14,7 @@ class Config:
     ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm'}
     JWT_EXPIRATION_HOURS = 24
     DAM_SERVER_URL = os.environ.get('DAM_SERVER_URL', 'http://192.168.88.31:8688')
+    EMBEDDING_DIM = int(os.environ.get('EMBEDDING_DIM', '1536'))
+    VECTOR_DATA_DIR = os.environ.get('VECTOR_DATA_DIR', os.path.join(BASE_DIR, 'data'))
+    FAISS_INDEX_PATH = os.environ.get('FAISS_INDEX_PATH', os.path.join(VECTOR_DATA_DIR, 'faiss.index'))
+    FAISS_MAP_PATH = os.environ.get('FAISS_MAP_PATH', os.path.join(VECTOR_DATA_DIR, 'faiss_id_map.pkl'))

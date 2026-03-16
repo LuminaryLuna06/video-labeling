@@ -1,11 +1,21 @@
 import os
 import uuid
+import json
+import hashlib
+import base64
+import tempfile
+import re
+from io import BytesIO
+import cv2
+import numpy as np
+import requests
 from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime, timezone
 from bson import ObjectId
 from werkzeug.utils import secure_filename
 from config import Config
 from utils.auth_middleware import token_required
+from utils.vector_store import upsert_embedding, search_embeddings
 
 videos_bp = Blueprint('videos', __name__)
 
@@ -14,6 +24,561 @@ ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm'}
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def _extract_video_frames(video_path: str, num_frames: int = 16):
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames <= 0:
+        cap.release()
+        return []
+
+    if total_frames <= num_frames:
+        frame_indices = list(range(total_frames))
+    else:
+        frame_indices = np.linspace(0, total_frames - 1, num_frames, dtype=int).tolist()
+
+    frames = []
+    for idx in frame_indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ok, frame_bgr = cap.read()
+        if not ok:
+            continue
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        frames.append(frame_rgb)
+
+    cap.release()
+    return frames
+
+
+def _to_rgba_base64(frame_rgb: np.ndarray) -> str:
+    alpha = np.full((frame_rgb.shape[0], frame_rgb.shape[1], 1), 255, dtype=np.uint8)
+    rgba = np.concatenate([frame_rgb, alpha], axis=2)
+    ok, encoded = cv2.imencode('.png', cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGRA))
+    if not ok:
+        raise ValueError('Could not encode frame')
+    return f"data:image/png;base64,{base64.b64encode(encoded.tobytes()).decode('utf-8')}"
+
+
+def _to_jpeg_base64(frame_rgb: np.ndarray) -> str:
+    ok, encoded = cv2.imencode('.jpg', cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR))
+    if not ok:
+        raise ValueError('Could not encode frame')
+    return f"data:image/jpeg;base64,{base64.b64encode(encoded.tobytes()).decode('utf-8')}"
+
+
+def _file_sha256(file_path: str) -> str:
+    hasher = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _request_embedding(image_b64: str):
+    resp = requests.post(
+        f"{Config.DAM_SERVER_URL}/embed",
+        json={'image': image_b64},
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        raise ValueError(f"Embedding API failed: {resp.text}")
+    return resp.json().get('embedding', [])
+
+
+def _request_dam_video_description(frames_rgb, prompt: str) -> str:
+    if not frames_rgb:
+        return ''
+
+    sample_count = min(8, len(frames_rgb))
+    idx = np.linspace(0, len(frames_rgb) - 1, sample_count, dtype=int).tolist()
+    selected = [frames_rgb[i] for i in idx]
+
+    content = [{'type': 'text', 'text': prompt}]
+    for fr in selected:
+        content.append({'type': 'image_url', 'image_url': {'url': _to_rgba_base64(fr)}})
+
+    payload = {
+        'model': 'describe_anything_model',
+        'messages': [{'role': 'user', 'content': content}],
+        'stream': False,
+    }
+    resp = requests.post(f"{Config.DAM_SERVER_URL}/chat/completions", json=payload, timeout=300)
+    if resp.status_code != 200:
+        raise ValueError(f"DAM chat failed: {resp.text}")
+
+    data = resp.json()
+    choices = data.get('choices') or []
+    if not choices:
+        return ''
+    msg = choices[0].get('message', {})
+    content_val = msg.get('content', '')
+    if isinstance(content_val, str):
+        return content_val
+    if isinstance(content_val, list):
+        texts = [x.get('text', '') for x in content_val if isinstance(x, dict)]
+        return '\n'.join([t for t in texts if t])
+    return ''
+
+
+def _extract_json_from_text(text: str):
+    """Try to parse JSON object from Gemini text response."""
+    if not text:
+        return None
+
+    raw = text.strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+
+    # Handle fenced json blocks.
+    if '```' in raw:
+        parts = raw.split('```')
+        for part in parts:
+            candidate = part.replace('json', '', 1).strip()
+            if not candidate:
+                continue
+            try:
+                return json.loads(candidate)
+            except Exception:
+                continue
+
+    # Best-effort: first JSON object substring.
+    start = raw.find('{')
+    end = raw.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        candidate = raw[start:end + 1]
+        try:
+            return json.loads(candidate)
+        except Exception:
+            return None
+    return None
+
+
+def _format_kb_for_prompt(items):
+    lines = []
+    for idx, item in enumerate(items or [], start=1):
+        lines.append(
+            f"{idx}. name={item.get('name', '')}; name_vi={item.get('name_vi', '')}; "
+            f"description={item.get('description', '')}; description_vi={item.get('description_vi', '')}; "
+            f"score={item.get('score', 0):.4f}"
+        )
+    return '\n'.join(lines) if lines else 'None found'
+
+
+def _build_bilingual_fallback(dam_description: str, aggregated_knowledge):
+    english = (dam_description or '').strip()
+    vietnamese = (dam_description or '').strip()
+
+    if aggregated_knowledge:
+        top_names_en = [k.get('name', '').strip() for k in aggregated_knowledge[:3] if k.get('name')]
+        top_names_vi = [
+            (k.get('name_vi') or k.get('name') or '').strip()
+            for k in aggregated_knowledge[:3]
+            if k.get('name_vi') or k.get('name')
+        ]
+
+        if top_names_en:
+            english = f"{english} This scene appears around {', '.join(top_names_en)}.".strip()
+        if top_names_vi:
+            vietnamese = f"{vietnamese} Cảnh này xuất hiện xung quanh {', '.join(top_names_vi)}.".strip()
+
+    return english, vietnamese
+
+
+def _is_vietnamese_text(text: str) -> bool:
+    if not text or len(text.strip()) < 20:
+        return False
+    # Detect common Vietnamese diacritics to avoid returning English in VI field.
+    return bool(re.search(r"[a-zA-Z]*[\u00C0-\u1EF9]+", text))
+
+
+def _collect_kb_from_similar_images(db, similar_images):
+    """Collect KB nodes linked to similar images via image_regions.knowledge_base_ids."""
+    collected = {}
+
+    for sim in (similar_images or [])[:8]:
+        image_id = sim.get('image_id')
+        if not image_id:
+            continue
+
+        try:
+            image_oid = ObjectId(image_id)
+        except Exception:
+            continue
+
+        kb_ids = set()
+        for region in db.image_regions.find({'image_id': image_oid}, {'knowledge_base_ids': 1, 'label': 1}):
+            for kb_id in region.get('knowledge_base_ids', []) or []:
+                kb_ids.add(str(kb_id))
+
+        image_doc = db.images.find_one({'_id': image_oid}, {'knowledge_base_ids': 1, 'original_name': 1})
+        if image_doc:
+            for kb_id in image_doc.get('knowledge_base_ids', []) or []:
+                kb_ids.add(str(kb_id))
+
+        for kb_id_str in kb_ids:
+            try:
+                kb_oid = ObjectId(kb_id_str)
+            except Exception:
+                continue
+
+            node = db.knowledge_base.find_one({'_id': kb_oid})
+            if not node:
+                continue
+
+            existing = collected.get(kb_id_str)
+            score = float(sim.get('score') or 0.0)
+            item = {
+                'id': kb_id_str,
+                'name': node.get('name', ''),
+                'name_vi': node.get('name_vi', ''),
+                'description': node.get('description', ''),
+                'description_vi': node.get('description_vi', ''),
+                'score': score,
+                'source': 'similar_image_link',
+                'source_image': image_doc.get('original_name', '') if image_doc else '',
+            }
+
+            if not existing or score > float(existing.get('score') or 0.0):
+                collected[kb_id_str] = item
+
+    return list(collected.values())
+
+
+def _split_sentences(text: str):
+    if not text:
+        return []
+    raw = re.split(r'[\.\n\r]+', text)
+    return [s.strip() for s in raw if s and len(s.strip()) > 20]
+
+
+def _build_story_facts(aggregated_knowledge, max_items: int = 10):
+    """Build concise KB facts for storytelling prompt instead of dumping full KB text."""
+    facts = []
+    for item in (aggregated_knowledge or [])[:max_items]:
+        name = (item.get('name') or '').strip()
+        name_vi = (item.get('name_vi') or '').strip()
+        desc = (item.get('description') or '').strip()
+        desc_vi = (item.get('description_vi') or '').strip()
+
+        if name:
+            facts.append(f"Anchor: {name}" + (f" ({name_vi})" if name_vi else ''))
+
+        for sent in _split_sentences(desc)[:2]:
+            facts.append(f"Fact: {sent}")
+        for sent_vi in _split_sentences(desc_vi)[:1]:
+            facts.append(f"Fact-VI: {sent_vi}")
+
+        if len(facts) >= 24:
+            break
+
+    return facts[:24]
+
+
+def _count_kb_anchor_mentions(text: str, aggregated_knowledge):
+    if not text:
+        return 0
+    lowered = text.lower()
+    count = 0
+    for item in (aggregated_knowledge or [])[:8]:
+        for key in ('name', 'name_vi'):
+            val = (item.get(key) or '').strip().lower()
+            if val and len(val) >= 3 and val in lowered:
+                count += 1
+                break
+    return count
+
+
+def _translate_to_vietnamese(model, english_text: str) -> str:
+    if not english_text:
+        return ''
+
+    vi_prompt = f"""Translate the following English travel caption into fluent Vietnamese with proper diacritics.
+Requirements:
+- Keep all place names and historical facts accurate.
+- Keep tone evocative and narrative.
+- Do not add or remove factual details.
+- Preserve all paragraphs and paragraph breaks from the original.
+- Output the full Vietnamese translation, do not shorten it.
+
+English:
+{english_text}
+
+Vietnamese:"""
+    try:
+        print("\n" + "="*60)
+        print("TRANSLATION PROMPT:")
+        print("="*60)
+        print(vi_prompt)
+        print("="*60 + "\n")
+        vi_resp = model.generate_content(vi_prompt)
+        return (getattr(vi_resp, 'text', '') or '').strip()
+    except Exception:
+        return ''
+
+
+def _run_video_ai_pipeline(
+    db,
+    video_path: str,
+    prompt: str,
+    num_frames: int,
+    use_gemini: bool,
+    video_id: str = None,
+    video_name: str = '',
+):
+    import google.generativeai as genai
+
+    frames = _extract_video_frames(video_path, num_frames)
+    if not frames:
+        raise ValueError('Could not extract frames from video')
+
+    frame_knowledge = []
+    all_knowledge = {}
+    frame_similar_images = []
+    all_similar_images = {}
+    cached_frame_embeddings = {}
+    newly_indexed_frames = 0
+
+    if video_id:
+        for emb_doc in db.embeddings.find(
+            {'entity_type': 'video_frame', 'metadata.video_id': str(video_id)},
+            {'embedding': 1, 'metadata.frame_index': 1},
+        ):
+            metadata = emb_doc.get('metadata') or {}
+            frame_index = metadata.get('frame_index')
+            embedding = emb_doc.get('embedding') or []
+            if isinstance(frame_index, int) and embedding:
+                cached_frame_embeddings[frame_index] = embedding
+
+    print(f"[DEBUG] cached video_frame embeddings={len(cached_frame_embeddings)} for video_id={video_id}")
+
+    for i, frame in enumerate(frames):
+        emb = cached_frame_embeddings.get(i)
+        if emb:
+            emb_source = 'cache'
+        else:
+            frame_b64 = _to_jpeg_base64(frame)
+            emb = _request_embedding(frame_b64)
+            emb_source = 'new'
+            if video_id and emb:
+                upsert_embedding(
+                    db,
+                    f"{video_id}_frame_{i}",
+                    'video_frame',
+                    emb,
+                    {
+                        'video_id': str(video_id),
+                        'frame_index': i,
+                        'video_name': video_name or '',
+                    },
+                )
+                newly_indexed_frames += 1
+        if not emb:
+            continue
+        if emb_source == 'new':
+            cached_frame_embeddings[i] = emb
+
+        kb_hits = search_embeddings(db, emb, top_k=5, entity_types=['kb_node'])
+
+        frame_items = []
+        for hit in kb_hits:
+            node = db.knowledge_base.find_one({'_id': ObjectId(hit['entity_id'])})
+            if not node:
+                continue
+            item = {
+                'name': node.get('name', ''),
+                'name_vi': node.get('name_vi', ''),
+                'description': node.get('description', ''),
+                'description_vi': node.get('description_vi', ''),
+                'score': hit['score'],
+            }
+            frame_items.append(item)
+            key = item['name'] or hit['entity_id']
+            if key not in all_knowledge or item['score'] > all_knowledge[key]['score']:
+                all_knowledge[key] = item
+
+        frame_knowledge.append({'frame_idx': i, 'knowledge': frame_items})
+
+        image_hits = search_embeddings(db, emb, top_k=4, entity_types=['image'])
+        frame_images = []
+        for hit in image_hits:
+            image_id = hit.get('entity_id')
+            if not image_id:
+                continue
+            try:
+                img = db.images.find_one({'_id': ObjectId(image_id)})
+            except Exception:
+                img = None
+            if not img:
+                continue
+
+            image_item = {
+                'image_id': image_id,
+                'filename': img.get('filename', ''),
+                'original_name': img.get('original_name', ''),
+                'url': f"/uploads/images/{img.get('filename', '')}",
+                'project_id': str(img.get('project_id')) if img.get('project_id') else None,
+                'score': hit.get('score', 0),
+            }
+            frame_images.append(image_item)
+
+            existing = all_similar_images.get(image_id)
+            if not existing or image_item['score'] > existing['score']:
+                all_similar_images[image_id] = image_item
+
+        frame_similar_images.append({'frame_idx': i, 'images': frame_images})
+
+    dam_description = _request_dam_video_description(frames, prompt)
+    print("\n" + "="*60)
+    print("DAM VISUAL CAPTION:")
+    print("="*60)
+    print(dam_description)
+    print("="*60 + "\n")
+    aggregated_knowledge = sorted(all_knowledge.values(), key=lambda x: -x['score'])[:10]
+    similar_images = sorted(all_similar_images.values(), key=lambda x: -x['score'])[:12]
+
+    # Merge extra KB nodes linked from top similar images.
+    linked_kb = _collect_kb_from_similar_images(db, similar_images)
+    for item in linked_kb:
+        key = item.get('id') or item.get('name') or str(item)
+        existing = all_knowledge.get(key)
+        if not existing or float(item.get('score') or 0.0) > float(existing.get('score') or 0.0):
+            all_knowledge[key] = item
+
+    aggregated_knowledge = sorted(all_knowledge.values(), key=lambda x: -x['score'])[:14]
+    story_facts = _build_story_facts(aggregated_knowledge)
+    fallback_en, fallback_vi = _build_bilingual_fallback(dam_description, aggregated_knowledge)
+
+    image_embedding_count = db.embeddings.count_documents({'entity_type': 'image'})
+    kb_embedding_count = db.embeddings.count_documents({'entity_type': 'kb_node'})
+
+    result = {
+        'num_frames': len(frames),
+        'dam_description': dam_description,
+        'frame_knowledge': frame_knowledge,
+        'frame_similar_images': frame_similar_images,
+        'aggregated_knowledge': aggregated_knowledge,
+        'story_facts': story_facts,
+        'linked_kb_from_similar_images': linked_kb,
+        'similar_images': similar_images,
+        'retrieval_debug': {
+            'image_embedding_count': image_embedding_count,
+            'kb_embedding_count': kb_embedding_count,
+            'similar_images_count': len(similar_images),
+            'knowledge_hits_count': len(aggregated_knowledge),
+            'cached_video_frame_embeddings': len(cached_frame_embeddings),
+            'newly_indexed_video_frames': newly_indexed_frames,
+        },
+        'similar_images_message': '',
+        'english_description': fallback_en,
+        'vietnamese_description': fallback_vi,
+        'final_description': f"English:\n{fallback_en}\n\nVietnamese:\n{fallback_vi}".strip(),
+    }
+
+    if not similar_images:
+        if image_embedding_count == 0:
+            result['similar_images_message'] = 'No similar images found because image vectors have not been indexed yet.'
+        else:
+            result['similar_images_message'] = 'No similar images matched the current video frames.'
+
+    print(f"[DEBUG] use_gemini={use_gemini}, dam_description={bool(result.get('dam_description'))}, aggregated_knowledge={bool(result.get('aggregated_knowledge'))}")
+    if use_gemini and (result.get('dam_description') or result.get('aggregated_knowledge')):
+        try:
+            settings = db.settings.find_one({'key': 'gemini_api_key'}) or {}
+            gemini_key = settings.get('value', os.environ.get('GEMINI_API_KEY', ''))
+            model_doc = db.settings.find_one({'key': 'gemini_model'}) or {}
+            gemini_model = model_doc.get('value', 'gemini-2.5-flash')
+            print(f"[DEBUG] gemini_key found={bool(gemini_key)}, length={len(gemini_key) if gemini_key else 0}")
+
+            if gemini_key:
+                genai.configure(api_key=gemini_key)
+                model = genai.GenerativeModel(gemini_model)
+
+                gemini_prompt = f"""You are given two inputs for one video:
+1) visual caption
+2) knowledge description
+
+Visual caption:
+{result.get('dam_description', 'Not available')}
+
+Knowledge description:
+{_format_kb_for_prompt(result.get('aggregated_knowledge', []))}
+
+Task:
+- Write 3 to 5 rich, detailed English paragraphs that naturally combine the visual caption and the knowledge description.
+- Include historical facts, cultural context, and vivid scene descriptions from both inputs.
+- Then translate those exact paragraphs into fluent Vietnamese with proper diacritics.
+- Keep it readable and engaging.
+- Do not output bullet points.
+
+Return ONLY valid JSON:
+{{
+    "english_description": "...",
+    "vietnamese_description": "..."
+}}
+"""
+
+                print("\n" + "="*60)
+                print("GEMINI PROMPT:")
+                print("="*60)
+                print(gemini_prompt)
+                print("="*60 + "\n")
+                gemini_response = model.generate_content(gemini_prompt)
+                result['gemini_description'] = gemini_response.text
+                print("\n" + "="*60)
+                print("GEMINI RESPONSE:")
+                print("="*60)
+                print(gemini_response.text)
+                print("="*60 + "\n")
+
+                parsed = _extract_json_from_text(gemini_response.text)
+                if isinstance(parsed, dict):
+                    en = (parsed.get('english_description') or '').strip()
+                    vi = (parsed.get('vietnamese_description') or '').strip()
+                    result['english_description'] = en or fallback_en
+                    # If Gemini did not return Vietnamese, translate the English paragraph
+                    if not vi:
+                        vi = _translate_to_vietnamese(model, result['english_description'])
+                    result['vietnamese_description'] = vi or fallback_vi or 'Chua co noi dung tieng Viet.'
+                    result['final_description'] = (
+                        f"English:\n{result['english_description']}\n\n"
+                        f"Vietnamese:\n{result['vietnamese_description']}"
+                    ).strip()
+                else:
+                    # Fallback if model does not return strict JSON.
+                    fallback_text = (gemini_response.text or '').strip()
+                    result['english_description'] = fallback_text or fallback_en
+                    vi = _translate_to_vietnamese(model, result['english_description'])
+                    result['vietnamese_description'] = vi or fallback_vi or 'Chua co noi dung tieng Viet.'
+                    result['final_description'] = (
+                        f"English:\n{result['english_description']}\n\n"
+                        f"Vietnamese:\n{result['vietnamese_description']}"
+                    ).strip()
+            else:
+                result['gemini_description'] = None
+                result['gemini_error'] = 'Gemini API key not configured'
+                if not result.get('vietnamese_description'):
+                    result['vietnamese_description'] = fallback_vi or 'Chua co noi dung tieng Viet.'
+                result['final_description'] = (
+                    f"English:\n{result['english_description']}\n\n"
+                    f"Vietnamese:\n{result['vietnamese_description']}"
+                ).strip()
+        except Exception as e:
+            import traceback
+            print("\n[GEMINI ERROR]", str(e))
+            traceback.print_exc()
+            result['gemini_description'] = None
+            result['gemini_error'] = str(e)
+            if not result.get('vietnamese_description'):
+                result['vietnamese_description'] = fallback_vi or 'Chua co noi dung tieng Viet.'
+            result['final_description'] = (
+                f"English:\n{result['english_description']}\n\n"
+                f"Vietnamese:\n{result['vietnamese_description']}"
+            ).strip()
+
+    return result
 
 
 @videos_bp.route('/upload', methods=['POST'])
@@ -749,3 +1314,274 @@ def get_qc_stats():
     )
     
     return jsonify(stats)
+
+
+# ============ Video Processing with AI ============
+
+@videos_bp.route('/<video_id>/process', methods=['POST'])
+@token_required
+def process_video_ai(video_id):
+    """
+    Process video using DAM server:
+    - Extract 16 frames
+    - Search KB for each frame using DINOv2 embeddings
+    - Get visual description from DAM
+    - Combine with Gemini for final description
+    """
+    try:
+        video = current_app.db.videos.find_one({'_id': ObjectId(video_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid video ID'}), 400
+
+    if not video:
+        return jsonify({'error': 'Video not found'}), 404
+
+    data = request.get_json() or {}
+    num_frames = data.get('num_frames', 16)
+    prompt = data.get('prompt', 'Describe this video in detail, including all visible objects, actions, and scenes.')
+    use_gemini = data.get('use_gemini', True)
+
+    try:
+        video_path = os.path.join(Config.UPLOAD_FOLDER, 'videos', video['filename'])
+        if not os.path.exists(video_path):
+            return jsonify({'error': 'Video file not found'}), 404
+        result = _run_video_ai_pipeline(
+            current_app.db,
+            video_path,
+            prompt,
+            num_frames,
+            use_gemini,
+            video_id=str(video['_id']),
+            video_name=video.get('original_name', ''),
+        )
+
+        newly_indexed = int((result.get('retrieval_debug') or {}).get('newly_indexed_video_frames') or 0)
+        if newly_indexed > 0:
+            current_app.db.videos.update_one(
+                {'_id': ObjectId(video_id)},
+                {
+                    '$set': {
+                        'indexed': True,
+                        'indexed_at': datetime.now(timezone.utc),
+                        'updated_at': datetime.now(timezone.utc),
+                    },
+                    '$inc': {'indexed_frames': newly_indexed},
+                },
+            )
+        
+        # Save processing result to video document
+        current_app.db.videos.update_one(
+            {'_id': ObjectId(video_id)},
+            {
+                '$set': {
+                    'ai_processing': {
+                        'dam_description': result.get('dam_description'),
+                        'frame_knowledge': result.get('frame_knowledge'),
+                        'frame_similar_images': result.get('frame_similar_images'),
+                        'aggregated_knowledge': result.get('aggregated_knowledge'),
+                        'similar_images': result.get('similar_images'),
+                        'gemini_description': result.get('gemini_description'),
+                        'english_description': result.get('english_description', ''),
+                        'vietnamese_description': result.get('vietnamese_description', ''),
+                        'final_description': result.get('final_description', ''),
+                        'processed_at': datetime.now(timezone.utc)
+                    },
+                    'updated_at': datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        return jsonify(result)
+        
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Failed to connect to DAM server: {str(e)}'}), 503
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@videos_bp.route('/demo/process', methods=['POST'])
+@token_required
+def process_video_demo():
+    """Process an uploaded demo video and return only AI description payload."""
+    if 'video' not in request.files:
+        return jsonify({'error': 'No video file provided'}), 400
+
+    file = request.files['video']
+    if not file or file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({'error': f'File type not allowed. Allowed: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+
+    prompt = (request.form.get('prompt') or 'Describe this video in detail, including all visible objects, actions, and scenes.').strip()
+    num_frames = int(request.form.get('num_frames', 16))
+    use_gemini = str(request.form.get('use_gemini', 'true')).lower() == 'true'
+
+    temp_path = ''
+    try:
+        suffix = os.path.splitext(secure_filename(file.filename))[1] or '.mp4'
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tf:
+            temp_path = tf.name
+        file.save(temp_path)
+
+        video_hash = _file_sha256(temp_path)
+        demo_video_cache_id = f"demo_{video_hash}"
+        result = _run_video_ai_pipeline(
+            current_app.db,
+            temp_path,
+            prompt,
+            num_frames,
+            use_gemini,
+            video_id=demo_video_cache_id,
+            video_name=file.filename,
+        )
+        return jsonify(result)
+    except requests.exceptions.RequestException as e:
+        return jsonify({'error': f'Failed to connect to DAM server: {str(e)}'}), 503
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+@videos_bp.route('/<video_id>/index', methods=['POST'])
+@token_required
+def index_video_frames(video_id):
+    """
+    Index video frames using DINOv2 embeddings for future search.
+    """
+    try:
+        video = current_app.db.videos.find_one({'_id': ObjectId(video_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid video ID'}), 400
+
+    if not video:
+        return jsonify({'error': 'Video not found'}), 404
+
+    try:
+        video_path = os.path.join(Config.UPLOAD_FOLDER, 'videos', video['filename'])
+
+        frames = _extract_video_frames(video_path, 16)
+        indexed_count = 0
+        for i, frame in enumerate(frames):
+            frame_b64 = _to_jpeg_base64(frame)
+            emb = _request_embedding(frame_b64)
+            if not emb:
+                continue
+            upsert_embedding(
+                current_app.db,
+                f"{video_id}_frame_{i}",
+                'video_frame',
+                emb,
+                {
+                    'video_id': video_id,
+                    'frame_index': i,
+                    'video_name': video['original_name'],
+                },
+            )
+            if emb:
+                indexed_count += 1
+        
+        # Update video with indexing info
+        current_app.db.videos.update_one(
+            {'_id': ObjectId(video_id)},
+            {
+                '$set': {
+                    'indexed': True,
+                    'indexed_frames': indexed_count,
+                    'indexed_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        return jsonify({
+            'success': True,
+            'indexed_frames': indexed_count,
+            'video_id': video_id
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@videos_bp.route('/search', methods=['POST'])
+@token_required
+def search_videos_by_image():
+    """
+    Search for similar videos using an image query.
+    """
+    data = request.get_json()
+    if not data or not data.get('query_image'):
+        return jsonify({'error': 'query_image required'}), 400
+    
+    try:
+        response = requests.post(
+            f"{Config.DAM_SERVER_URL}/embed",
+            json={
+                'image': data['query_image'],
+            },
+            timeout=60
+        )
+        if response.status_code != 200:
+            return jsonify({'error': f'Embedding failed: {response.text}'}), 500
+
+        emb = response.json().get('embedding')
+        if not emb:
+            return jsonify({'results': [], 'total': 0})
+        search_results = {
+            'results': search_embeddings(
+                current_app.db,
+                emb,
+                top_k=data.get('top_k', 20),
+                entity_types=['video_frame'],
+            )
+        }
+        
+        # Group results by video
+        video_scores = {}
+        for result in search_results.get('results', []):
+            video_id = result.get('metadata', {}).get('video_id')
+            if video_id:
+                if video_id not in video_scores:
+                    video_scores[video_id] = {
+                        'max_score': result['score'],
+                        'frame_matches': []
+                    }
+                video_scores[video_id]['frame_matches'].append({
+                    'frame_index': result.get('metadata', {}).get('frame_index'),
+                    'score': result['score']
+                })
+                if result['score'] > video_scores[video_id]['max_score']:
+                    video_scores[video_id]['max_score'] = result['score']
+        
+        # Get video details
+        videos = []
+        for video_id, scores in sorted(video_scores.items(), key=lambda x: -x[1]['max_score']):
+            try:
+                video = current_app.db.videos.find_one({'_id': ObjectId(video_id)})
+                if video:
+                    videos.append({
+                        'video': _build_video_stats(current_app.db, video),
+                        'score': scores['max_score'],
+                        'frame_matches': scores['frame_matches']
+                    })
+            except Exception:
+                pass
+        
+        return jsonify({
+            'results': videos,
+            'total': len(videos)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500

@@ -32,6 +32,20 @@ interface QCStats {
   pending_reviews: PendingReviewItem[];
 }
 
+interface ImageQCStats {
+  total_images: number;
+  by_status: {
+    pending: number;
+    approved: number;
+    rejected: number;
+    in_review: number;
+  };
+  by_project: { [key: string]: { total: number; approved: number; rejected: number; pending: number; in_review: number } };
+  by_user: UserStats[];
+  recent_reviews: ImageReviewItem[];
+  pending_reviews: ImagePendingReviewItem[];
+}
+
 interface UserStats {
   id: string;
   name: string;
@@ -51,9 +65,28 @@ interface ReviewItem {
   reviewed_at: string;
 }
 
+interface ImageReviewItem {
+  image_id: string;
+  image_name: string;
+  project_name: string;
+  reviewer_name: string;
+  reviewer_color: string;
+  status: string;
+  reviewed_at: string;
+}
+
 interface PendingReviewItem {
   video_id: string;
   video_name: string;
+  project_name: string;
+  subpart_name: string;
+  pending_reviewers: { id: string; name: string; color: string }[];
+  created_at: string;
+}
+
+interface ImagePendingReviewItem {
+  image_id: string;
+  image_name: string;
   project_name: string;
   subpart_name: string;
   pending_reviewers: { id: string; name: string; color: string }[];
@@ -74,19 +107,32 @@ interface PendingReviewItem {
 })
 export class QcDashboardComponent implements OnInit {
   loading = true;
+  loadingImages = true;
   stats: QCStats | null = null;
+  imageStats: ImageQCStats | null = null;
   user = this.authService.user;
+
+  // Tab selection: 'video' | 'image'
+  activeTab: 'video' | 'image' = 'video';
 
   displayedReviewColumns = ['video', 'project', 'reviewer', 'status', 'date', 'actions'];
   displayedPendingColumns = ['video', 'project', 'subpart', 'pending_reviewers', 'waiting_since', 'actions'];
 
-  // Pagination for pending reviews
+  // Pagination for pending reviews (video)
   pendingPage = 1;
   pendingPageSize = 10;
 
-  // Pagination for recent activity
+  // Pagination for recent activity (video)
   activityPage = 1;
   activityPageSize = 10;
+
+  // Pagination for pending reviews (image)
+  imagePendingPage = 1;
+  imagePendingPageSize = 10;
+
+  // Pagination for recent activity (image)
+  imageActivityPage = 1;
+  imageActivityPageSize = 10;
 
   constructor(
     private http: HttpClient,
@@ -98,6 +144,7 @@ export class QcDashboardComponent implements OnInit {
 
   ngOnInit(): void {
     this.loadStats();
+    this.loadImageStats();
   }
 
   loadStats(): void {
@@ -111,6 +158,24 @@ export class QcDashboardComponent implements OnInit {
         this.loading = false;
       }
     });
+  }
+
+  loadImageStats(): void {
+    this.loadingImages = true;
+    this.http.get<ImageQCStats>('/api/images/qc-stats').subscribe({
+      next: (data) => {
+        this.imageStats = data;
+        this.loadingImages = false;
+      },
+      error: () => {
+        this.loadingImages = false;
+      }
+    });
+  }
+
+  refreshAll(): void {
+    this.loadStats();
+    this.loadImageStats();
   }
 
   get projectStats(): { name: string; total: number; approved: number; rejected: number; pending: number; in_review: number; approvalRate: number }[] {
@@ -130,6 +195,26 @@ export class QcDashboardComponent implements OnInit {
   get rejectionRate(): number {
     if (!this.stats || this.stats.total_videos === 0) return 0;
     return Math.round((this.stats.by_status.rejected / this.stats.total_videos) * 100);
+  }
+
+  // Image Stats
+  get imageProjectStats(): { name: string; total: number; approved: number; rejected: number; pending: number; in_review: number; approvalRate: number }[] {
+    if (!this.imageStats) return [];
+    return Object.entries(this.imageStats.by_project).map(([name, data]) => ({
+      name,
+      ...data,
+      approvalRate: data.total > 0 ? Math.round((data.approved / data.total) * 100) : 0
+    })).sort((a, b) => b.total - a.total);
+  }
+
+  get imageApprovalRate(): number {
+    if (!this.imageStats || this.imageStats.total_images === 0) return 0;
+    return Math.round((this.imageStats.by_status.approved / this.imageStats.total_images) * 100);
+  }
+
+  get imageRejectionRate(): number {
+    if (!this.imageStats || this.imageStats.total_images === 0) return 0;
+    return Math.round((this.imageStats.by_status.rejected / this.imageStats.total_images) * 100);
   }
 
   // Pagination: Pending Reviews
@@ -172,8 +257,52 @@ export class QcDashboardComponent implements OnInit {
     if (this.activityPage < this.activityTotalPages) this.activityPage++;
   }
 
+  // Pagination: Image Pending Reviews
+  get paginatedImagePendingReviews(): ImagePendingReviewItem[] {
+    if (!this.imageStats) return [];
+    const start = (this.imagePendingPage - 1) * this.imagePendingPageSize;
+    return this.imageStats.pending_reviews.slice(start, start + this.imagePendingPageSize);
+  }
+
+  get imagePendingTotalPages(): number {
+    if (!this.imageStats) return 1;
+    return Math.ceil(this.imageStats.pending_reviews.length / this.imagePendingPageSize) || 1;
+  }
+
+  imagePendingPrevPage(): void {
+    if (this.imagePendingPage > 1) this.imagePendingPage--;
+  }
+
+  imagePendingNextPage(): void {
+    if (this.imagePendingPage < this.imagePendingTotalPages) this.imagePendingPage++;
+  }
+
+  // Pagination: Image Recent Activity
+  get paginatedImageRecentReviews(): ImageReviewItem[] {
+    if (!this.imageStats) return [];
+    const start = (this.imageActivityPage - 1) * this.imageActivityPageSize;
+    return this.imageStats.recent_reviews.slice(start, start + this.imageActivityPageSize);
+  }
+
+  get imageActivityTotalPages(): number {
+    if (!this.imageStats) return 1;
+    return Math.ceil(this.imageStats.recent_reviews.length / this.imageActivityPageSize) || 1;
+  }
+
+  imageActivityPrevPage(): void {
+    if (this.imageActivityPage > 1) this.imageActivityPage--;
+  }
+
+  imageActivityNextPage(): void {
+    if (this.imageActivityPage < this.imageActivityTotalPages) this.imageActivityPage++;
+  }
+
   openVideo(videoId: string): void {
     this.router.navigate(['/editor', videoId]);
+  }
+
+  openImage(imageId: string): void {
+    this.router.navigate(['/image-editor', imageId]);
   }
 
   getStatusClass(status: string): string {

@@ -33,6 +33,7 @@ import { SettingsDialogComponent } from '../pages/settings-dialog/settings-dialo
   styleUrls: ['./knowledge-base.component.scss']
 })
 export class KnowledgeBaseComponent implements OnInit {
+  Math = Math; // For template usage
   user = this.authService.user;
   kbNodes: KBNode[] = [];
   kbTree: KBNode[] = [];
@@ -71,6 +72,10 @@ export class KnowledgeBaseComponent implements OnInit {
 
   // Expanded tree nodes
   expandedNodes: Set<string> = new Set();
+
+  // Pagination for list view
+  listPage = 1;
+  listPageSize = 15;
 
   constructor(
     private router: Router,
@@ -123,12 +128,16 @@ export class KnowledgeBaseComponent implements OnInit {
   searchNodes(): void {
     if (!this.searchQuery && !this.filterType) {
       this.loadKBTree();
+      this.listPage = 1;
       return;
     }
     this.kbService.getAllNodes({ search: this.searchQuery, type: this.filterType }).subscribe({
       next: (nodes) => {
         this.kbTree = nodes;
+        // For list view, set flattenedNodes to the search results (they are already flat)
+        this.flattenedNodes = nodes.map((node, index) => ({ ...node, level: 0 }));
         this.viewMode = 'list';
+        this.listPage = 1;
       }
     });
   }
@@ -137,6 +146,7 @@ export class KnowledgeBaseComponent implements OnInit {
     this.searchQuery = '';
     this.filterType = '';
     this.viewMode = 'tree';
+    this.listPage = 1;
     this.loadKBTree();
   }
 
@@ -151,6 +161,43 @@ export class KnowledgeBaseComponent implements OnInit {
 
   isExpanded(node: KBNode): boolean {
     return this.expandedNodes.has(node.id);
+  }
+
+  // Pagination for list view
+  get paginatedNodes(): KBNode[] {
+    const start = (this.listPage - 1) * this.listPageSize;
+    return this.flattenedNodes.slice(start, start + this.listPageSize);
+  }
+
+  get listTotalPages(): number {
+    return Math.ceil(this.flattenedNodes.length / this.listPageSize);
+  }
+
+  goToListPage(page: number): void {
+    if (page >= 1 && page <= this.listTotalPages) {
+      this.listPage = page;
+    }
+  }
+
+  getListPageNumbers(): number[] {
+    const pages: number[] = [];
+    const total = this.listTotalPages;
+    const current = this.listPage;
+    
+    // Always show first page
+    pages.push(1);
+    
+    // Show pages around current
+    for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) {
+      if (!pages.includes(i)) pages.push(i);
+    }
+    
+    // Always show last page if > 1
+    if (total > 1 && !pages.includes(total)) {
+      pages.push(total);
+    }
+    
+    return pages.sort((a, b) => a - b);
   }
 
   // Dialog operations

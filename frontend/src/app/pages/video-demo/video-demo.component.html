@@ -1,0 +1,162 @@
+<nav class="navbar">
+  <div class="nav-left">
+    <div class="nav-logo">
+      <mat-icon>smart_display</mat-icon>
+      <span>AIRC Annotator</span>
+    </div>
+    <div class="nav-links">
+      <a class="nav-link" routerLink="/dashboard" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+        <mat-icon>folder</mat-icon>
+        <span>Projects</span>
+      </a>
+      <a class="nav-link" routerLink="/qc-dashboard" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+        <mat-icon>verified</mat-icon>
+        <span>Quality Control</span>
+      </a>
+      <a class="nav-link" routerLink="/knowledge-base" routerLinkActive="active">
+        <mat-icon>psychology</mat-icon>
+        <span>Knowledge Base</span>
+      </a>
+      <a class="nav-link" routerLink="/video-demo" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+        <mat-icon>smart_display</mat-icon>
+        <span>Video Demo</span>
+      </a>
+    </div>
+  </div>
+</nav>
+
+<div class="demo-page">
+  <div class="page-header">
+    <div>
+      <h1>Video Demo</h1>
+      <p>Upload a video and generate AI description directly.</p>
+    </div>
+    <label class="upload-btn" for="videoDemoInput">
+      <mat-icon>upload_file</mat-icon>
+      <span>Choose Video</span>
+    </label>
+    <input id="videoDemoInput" type="file" accept="video/*" (change)="onVideoSelected($event)" hidden>
+  </div>
+
+  <div class="index-toolbar">
+    <mat-form-field appearance="outline" class="project-select">
+      <mat-label>Project for Image Indexing</mat-label>
+      <mat-select [(ngModel)]="selectedProjectId">
+        @for (project of projects; track project.id) {
+          <mat-option [value]="project.id">
+            {{ project.name }}
+          </mat-option>
+        }
+      </mat-select>
+    </mat-form-field>
+
+    <button mat-raised-button class="index-btn" (click)="autoIndexProjectImages()" [disabled]="!selectedProjectId || indexing">
+      <mat-icon>hub</mat-icon>
+      <span>Auto Index Images</span>
+    </button>
+  </div>
+
+  @if (indexing) {
+    <div class="loading-row">
+      <mat-spinner diameter="22"></mat-spinner>
+      <span>Indexing images to vector DB...</span>
+    </div>
+  }
+
+  @if (indexSummary) {
+    <div class="index-summary">{{ indexSummary }}</div>
+  }
+
+  @if (videoUrl) {
+    <div class="video-card">
+      <div class="video-title">{{ fileName }}</div>
+      <video #demoVideo [src]="videoUrl" controls></video>
+      <div class="tts-toolbar">
+        <button mat-stroked-button class="tts-btn" (click)="playNarrationWithVideo()" [disabled]="processing || !(vietnameseDescription || englishDescription || finalDescription)">
+          <mat-icon>volume_up</mat-icon>
+          <span>Play Narration</span>
+        </button>
+        <button mat-stroked-button class="tts-btn stop" (click)="stopNarration()" [disabled]="!speaking">
+          <mat-icon>stop_circle</mat-icon>
+          <span>Stop Narration</span>
+        </button>
+        <label class="auto-tts-toggle">
+          <input type="checkbox" [(ngModel)]="autoNarrationEnabled">
+          <span>Auto play narration after captioning</span>
+        </label>
+      </div>
+      <textarea
+        class="prompt-input"
+        rows="3"
+        [(ngModel)]="prompt"
+        placeholder="Prompt for AI description">
+      </textarea>
+      <button mat-raised-button class="extract-btn" (click)="generateDescription()" [disabled]="processing">
+        <mat-icon>auto_awesome</mat-icon>
+        <span>Generate Description</span>
+      </button>
+    </div>
+  }
+
+  @if (processing) {
+    <div class="loading-row">
+      <mat-spinner diameter="28"></mat-spinner>
+      <span>Generating AI description...</span>
+    </div>
+  }
+
+  @if (englishDescription || vietnameseDescription || finalDescription) {
+    <div class="result-card">
+      <h3>Unified Travel Caption</h3>
+      @if (englishDescription) {
+        <h4>English</h4>
+        <pre>{{ englishDescription }}</pre>
+      }
+      @if (vietnameseDescription) {
+        <h4>Vietnamese</h4>
+        <pre>{{ vietnameseDescription }}</pre>
+      }
+      @if (!vietnameseDescription && (englishDescription || finalDescription)) {
+        <h4>Vietnamese</h4>
+        <pre>Chua co noi dung tieng Viet.</pre>
+      }
+      @if (!englishDescription && !vietnameseDescription && finalDescription) {
+        <pre>{{ finalDescription }}</pre>
+      }
+    </div>
+  }
+
+  @if (damDescription && finalDescription !== damDescription) {
+    <div class="result-card muted">
+      <h3>Raw Visual Description (DAM)</h3>
+      <pre>{{ damDescription }}</pre>
+    </div>
+  }
+
+  @if (similarImages.length) {
+    <div class="result-card">
+      <h3>Similar Images Retrieved From KB</h3>
+      <div class="similar-grid">
+        @for (img of similarImages; track img.image_id) {
+          <div class="similar-item">
+            <img [src]="img.url" [alt]="img.original_name || img.filename">
+            <div class="meta">
+              <div class="name">{{ img.original_name || img.filename }}</div>
+              <div class="score">Score: {{ img.score | number:'1.3-3' }}</div>
+            </div>
+          </div>
+        }
+      </div>
+    </div>
+  }
+
+  @if (hasGenerated && !similarImages.length) {
+    <div class="result-card muted">
+      <h3>Similar Images Retrieved From KB</h3>
+      <p class="empty-similar">{{ similarImagesMessage || 'Khong tim thay anh tuong tu trong KB cho video nay.' }}</p>
+      @if (retrievalDebugText) {
+        <p class="debug-text">{{ retrievalDebugText }}</p>
+      }
+    </div>
+  }
+</div>

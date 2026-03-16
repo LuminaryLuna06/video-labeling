@@ -38,6 +38,16 @@ export class DashboardComponent implements OnInit {
   showCreateDialog = false;
   newProjectName = '';
   newProjectDesc = '';
+  newProjectType: 'video' | 'image' = 'video';
+  newTaskType: 'object_detection' | 'classification' | 'captioning' | 'qa' | 'segmentation' = 'object_detection';
+
+  taskTypes = [
+    { value: 'object_detection', label: 'Object Detection', icon: 'crop_free', desc: 'Detect objects with bounding boxes' },
+    { value: 'segmentation', label: 'Segmentation', icon: 'auto_fix_high', desc: 'Segment objects with pixel-level masks' },
+    { value: 'classification', label: 'Classification', icon: 'category', desc: 'Classify images with labels' },
+    { value: 'captioning', label: 'Captioning', icon: 'subtitles', desc: 'Write descriptive captions' },
+    { value: 'qa', label: 'Q&A', icon: 'quiz', desc: 'Question & Answer pairs' }
+  ];
 
   user = this.authService.user;
 
@@ -73,14 +83,24 @@ export class DashboardComponent implements OnInit {
   createProject(): void {
     if (!this.newProjectName) return;
 
-    this.projectService.createProject({
+    const projectData: any = {
       name: this.newProjectName,
-      description: this.newProjectDesc
-    }).subscribe({
+      description: this.newProjectDesc,
+      project_type: this.newProjectType
+    };
+
+    // Only add task_type for image projects
+    if (this.newProjectType === 'image') {
+      projectData.task_type = this.newTaskType;
+    }
+
+    this.projectService.createProject(projectData).subscribe({
       next: (project) => {
         this.showCreateDialog = false;
         this.newProjectName = '';
         this.newProjectDesc = '';
+        this.newProjectType = 'video';
+        this.newTaskType = 'object_detection';
         this.loadProjects();
         this.snackBar.open('Project created!', 'Close', { duration: 2000, panelClass: 'snack-success' });
       },
@@ -127,6 +147,16 @@ export class DashboardComponent implements OnInit {
   getProjectColor(project: Project): string {
     const index = this.projects.indexOf(project) % this.colors.length;
     return this.colors[index];
+  }
+
+  getTaskLabel(taskType?: string): string {
+    const task = this.taskTypes.find(t => t.value === taskType);
+    return task?.label || '';
+  }
+
+  getTaskIcon(taskType?: string): string {
+    const task = this.taskTypes.find(t => t.value === taskType);
+    return task?.icon || 'image';
   }
 
   openSettings(): void {

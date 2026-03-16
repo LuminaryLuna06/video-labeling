@@ -16,6 +16,7 @@
 
 # Adapted from https://github.com/NVlabs/VILA/blob/ec7fb2c264920bf004fd9fa37f1ec36ea0942db5/server.py
 # This script offers an OpenAI-compatible server for the Describe Anything Model (DAM).
+# Extended with DINOv2 embedding APIs. Indexing/search persistence is handled in backend.
 
 import argparse
 import base64
@@ -29,8 +30,10 @@ from typing import List, Literal, Optional, Union, get_args
 
 import requests
 import torch
+import torch.nn.functional as F
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image as PILImage
 from PIL.Image import Image
@@ -43,8 +46,19 @@ import tempfile
 import shutil
 import cv2
 from typing import AsyncGenerator, Generator
+from torchvision import transforms
 
 from dam import DescribeAnythingModel, DEFAULT_IMAGE_TOKEN, disable_torch_init
+
+# ============ Global Variables ============
+dam = None
+sam2_predictor = None
+dinov2_model = None
+dinov2_transform = None
+
+# ============ Configuration ============
+DINOV2_MODEL = os.getenv('DINOV2_MODEL', 'dinov2_vitg14')  # Largest DINOv2 model
+EMBEDDING_DIM = 1536  # DINOv2 ViT-G/14 dimension
 
 
 class TextContent(BaseModel):
@@ -103,9 +117,69 @@ def process_rgba_image(rgba_pil):
     return image_pil, mask_pil
 
 
+# ============ DINOv2 Helper Functions ============
+def load_dinov2_model(model_name: str = 'dinov2_vitg14'):
+    """Load DINOv2 model from torch hub."""
+    print(f"[DINOv2] Loading {model_name}...")
+    model = torch.hub.load('facebookresearch/dinov2', model_name)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device)
+    model.eval()
+    
+    # DINOv2 expects images normalized with ImageNet stats
+    transform = transforms.Compose([
+        transforms.Resize(518, interpolation=transforms.InterpolationMode.BICUBIC),
+        transforms.CenterCrop(518),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
+    print(f"[DINOv2] Model loaded on {device}")
+    return model, transform
+
+
+def get_dinov2_embedding(image: PILImage.Image, mask: PILImage.Image = None) -> np.ndarray:
+    """Get DINOv2 embedding for an image, optionally masked to a region."""
+    global dinov2_model, dinov2_transform
+    
+    if dinov2_model is None:
+        raise RuntimeError("DINOv2 model not loaded")
+    
+    # Convert to RGB if needed
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+    
+    # If mask provided, crop to bounding box of mask
+    if mask is not None:
+        mask_np = np.array(mask.convert('L'))
+        if mask_np.max() > 0:
+            rows = np.any(mask_np > 128, axis=1)
+            cols = np.any(mask_np > 128, axis=0)
+            rmin, rmax = np.where(rows)[0][[0, -1]]
+            cmin, cmax = np.where(cols)[0][[0, -1]]
+            # Add padding
+            pad = 10
+            rmin = max(0, rmin - pad)
+            rmax = min(mask_np.shape[0], rmax + pad)
+            cmin = max(0, cmin - pad)
+            cmax = min(mask_np.shape[1], cmax + pad)
+            image = image.crop((cmin, rmin, cmax, rmax))
+    
+    # Transform and get embedding
+    device = next(dinov2_model.parameters()).device
+    img_tensor = dinov2_transform(image).unsqueeze(0).to(device)
+    
+    with torch.no_grad():
+        embedding = dinov2_model(img_tensor)
+        embedding = F.normalize(embedding, p=2, dim=1)
+    
+    return embedding.cpu().numpy().flatten()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global dam, sam2_predictor
+    global dam, sam2_predictor, dinov2_model, dinov2_transform
+    
     disable_torch_init()
     prompt_modes = {
         "focal_prompt": "full+focal_crop",
@@ -115,8 +189,15 @@ async def lifespan(app: FastAPI):
         conv_mode=app.args.conv_mode,
         prompt_mode=prompt_modes[app.args.prompt_mode],
     )
-    print(
-        f"Model {dam.model_name} loaded successfully.")
+    print(f"Model {dam.model_name} loaded successfully.")
+
+    # Load DINOv2 model
+    try:
+        dinov2_model_name = getattr(app.args, 'dinov2_model', DINOV2_MODEL)
+        dinov2_model, dinov2_transform = load_dinov2_model(dinov2_model_name)
+    except Exception as e:
+        print(f"[DINOv2] Failed to load model: {e}")
+        traceback.print_exc()
 
     # Load SAM2 model for segmentation (same approach as demo_video.py)
     sam2_predictor = None
@@ -167,6 +248,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(debug=True, lifespan=lifespan)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 async def convert_generator_to_async(gen: Generator) -> AsyncGenerator:
@@ -446,13 +536,55 @@ async def segment_object(req: SegmentRequest):
             return JSONResponse(status_code=500, content={'error': str(e)})
 
 
+# ============ DINOv2 Embedding Endpoints ============
+
+class EmbedRequest(BaseModel):
+    image: str  # base64 encoded image
+    mask: Optional[str] = None  # optional base64 mask for region embedding
+    entity_id: Optional[str] = None  # ID to associate with embedding
+    entity_type: Optional[str] = 'image'  # 'image' or 'object'
+
+
+@app.post("/embed")
+async def get_embedding(request: EmbedRequest):
+    """Get DINOv2 embedding for an image or masked region."""
+    try:
+        if dinov2_model is None:
+            return JSONResponse(status_code=503, content={'error': 'DINOv2 model not loaded'})
+        
+        # Decode image
+        img_raw = request.image.split(',')[-1] if ',' in request.image else request.image
+        image = PILImage.open(BytesIO(base64.b64decode(img_raw))).convert('RGB')
+        
+        # Decode mask if provided
+        mask = None
+        if request.mask:
+            mask_raw = request.mask.split(',')[-1] if ',' in request.mask else request.mask
+            mask = PILImage.open(BytesIO(base64.b64decode(mask_raw))).convert('L')
+        
+        # Get embedding
+        embedding = get_dinov2_embedding(image, mask)
+        
+        return {
+            'embedding': embedding.tolist(),
+            'dimension': len(embedding),
+            'entity_id': request.entity_id,
+            'entity_type': request.entity_type
+        }
+    
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={'error': str(e)})
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
         "status": "ok",
         "dam_loaded": dam is not None,
-        "sam2_loaded": sam2_predictor is not None
+        "sam2_loaded": sam2_predictor is not None,
+        "dinov2_loaded": dinov2_model is not None
     }
 
 
@@ -484,9 +616,11 @@ if __name__ == "__main__":
                         help="Path to SAM2 checkpoint (e.g., checkpoints/sam2.1_hiera_large.pt)")
     parser.add_argument("--sam2-config", type=str, default="",
                         help="Path to SAM2 config YAML (e.g., configs/sam2.1/sam2.1_hiera_l.yaml). Auto-detected if empty.")
+    parser.add_argument("--dinov2-model", type=str, default=DINOV2_MODEL,
+                        help="DINOv2 model name (dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14)")
     app.args = parser.parse_args()
 
-    # Pass SAM2 args to app for lifespan access
+    # Pass args to app for lifespan access
     app._sam2_checkpoint = app.args.sam2_checkpoint
     app._sam2_config = app.args.sam2_config
 

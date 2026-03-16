@@ -108,10 +108,10 @@
       </div>
     }
 
-    <!-- List View -->
+    <!-- List View (Table with hierarchy) -->
     @if (!loading && viewMode === 'list') {
-      <div class="kb-list">
-        @if (kbTree.length === 0) {
+      <div class="kb-table-container">
+        @if (flattenedNodes.length === 0) {
           <div class="empty-state">
             <mat-icon>search_off</mat-icon>
             <h3>No Results Found</h3>
@@ -121,50 +121,109 @@
               Clear Filters
             </button>
           </div>
-        }
-        @for (node of kbTree; track node.id) {
-          <div class="kb-list-item">
-            <div class="list-item-icon" [style.background]="getTypeColor(node.type) + '22'" [style.color]="getTypeColor(node.type)">
-              <mat-icon>{{ getTypeIcon(node.type) }}</mat-icon>
-            </div>
-            <div class="list-item-content">
-              <div class="list-item-header">
-                <span class="node-name">{{ node.name }}</span>
-                <span class="node-id">{{ node.id }}</span>
-              </div>
-              @if (node.description) {
-                <p class="node-description">{{ node.description }}</p>
+        } @else {
+          <table class="kb-table">
+            <thead>
+              <tr>
+                <th class="col-name">Name</th>
+                <th class="col-type">Type</th>
+                <th class="col-parent">Parent</th>
+                <th class="col-tags">Tags</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (node of paginatedNodes; track node.id) {
+                <tr>
+                  <td class="col-name">
+                    <div class="node-name-cell" [style.paddingLeft]="((node.level || 0) * 20) + 'px'">
+                      @if (node.level && node.level > 0) {
+                        <span class="tree-indent">
+                          <mat-icon class="indent-icon">subdirectory_arrow_right</mat-icon>
+                        </span>
+                      }
+                      <div class="node-icon-mini" [style.background]="getTypeColor(node.type) + '22'" [style.color]="getTypeColor(node.type)">
+                        <mat-icon>{{ getTypeIcon(node.type) }}</mat-icon>
+                      </div>
+                      <div class="node-name-info">
+                        <span class="name">{{ node.name }}</span>
+                        @if (node.name_vi) {
+                          <span class="name-vi">{{ node.name_vi }}</span>
+                        }
+                      </div>
+                    </div>
+                  </td>
+                  <td class="col-type">
+                    <span class="type-chip" [style.background]="getTypeColor(node.type) + '22'" [style.color]="getTypeColor(node.type)">
+                      <mat-icon>{{ getTypeIcon(node.type) }}</mat-icon>
+                      {{ getTypeLabel(node.type) }}
+                    </span>
+                  </td>
+                  <td class="col-parent">
+                    @if (node.parent_id) {
+                      <span class="parent-name">{{ getParentName(node.parent_id) }}</span>
+                    } @else {
+                      <span class="no-parent">—</span>
+                    }
+                  </td>
+                  <td class="col-tags">
+                    <div class="tags-cell">
+                      @for (tag of node.tags?.slice(0, 2) || []; track tag) {
+                        <span class="tag-chip">{{ tag }}</span>
+                      }
+                      @if ((node.tags?.length || 0) > 2) {
+                        <span class="more-tags">+{{ (node.tags?.length || 0) - 2 }}</span>
+                      }
+                    </div>
+                  </td>
+                  <td class="col-actions">
+                    <div class="action-buttons">
+                      <button mat-icon-button matTooltip="Add Child" (click)="openCreateDialog(node.id)">
+                        <mat-icon>add_circle_outline</mat-icon>
+                      </button>
+                      <button mat-icon-button matTooltip="Edit" (click)="openEditDialog(node)">
+                        <mat-icon>edit</mat-icon>
+                      </button>
+                      <button mat-icon-button matTooltip="Delete" (click)="deleteNode(node)">
+                        <mat-icon>delete</mat-icon>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
               }
-              <div class="node-meta">
-                <span class="type-badge" [style.background]="getTypeColor(node.type) + '22'" [style.color]="getTypeColor(node.type)">
-                  {{ getTypeLabel(node.type) }}
-                </span>
-                @if (node.parent_id) {
-                  <span class="parent-badge">
-                    <mat-icon>subdirectory_arrow_right</mat-icon>
-                    {{ getParentName(node.parent_id) }}
-                  </span>
+            </tbody>
+          </table>
+
+          <!-- Pagination -->
+          @if (listTotalPages > 1) {
+            <div class="table-pagination">
+              <span class="pagination-info">
+                Showing {{ (listPage - 1) * listPageSize + 1 }} - {{ Math.min(listPage * listPageSize, flattenedNodes.length) }} of {{ flattenedNodes.length }} nodes
+              </span>
+              <div class="pagination-controls">
+                <button mat-icon-button [disabled]="listPage === 1" (click)="goToListPage(1)" matTooltip="First page">
+                  <mat-icon>first_page</mat-icon>
+                </button>
+                <button mat-icon-button [disabled]="listPage === 1" (click)="goToListPage(listPage - 1)" matTooltip="Previous page">
+                  <mat-icon>chevron_left</mat-icon>
+                </button>
+                @for (p of getListPageNumbers(); track p; let i = $index) {
+                  @if (i > 0 && p - getListPageNumbers()[i - 1] > 1) {
+                    <span class="page-ellipsis">...</span>
+                  }
+                  <button mat-button class="page-btn" [class.active]="p === listPage" (click)="goToListPage(p)">
+                    {{ p }}
+                  </button>
                 }
-                @for (tag of node.tags.slice(0, 3); track tag) {
-                  <span class="tag-badge">{{ tag }}</span>
-                }
-                @if (node.tags.length > 3) {
-                  <span class="more-tags">+{{ node.tags.length - 3 }}</span>
-                }
+                <button mat-icon-button [disabled]="listPage === listTotalPages" (click)="goToListPage(listPage + 1)" matTooltip="Next page">
+                  <mat-icon>chevron_right</mat-icon>
+                </button>
+                <button mat-icon-button [disabled]="listPage === listTotalPages" (click)="goToListPage(listTotalPages)" matTooltip="Last page">
+                  <mat-icon>last_page</mat-icon>
+                </button>
               </div>
             </div>
-            <div class="list-item-actions">
-              <button mat-icon-button matTooltip="Add Child" (click)="openCreateDialog(node.id)">
-                <mat-icon>add_circle_outline</mat-icon>
-              </button>
-              <button mat-icon-button matTooltip="Edit" (click)="openEditDialog(node)">
-                <mat-icon>edit</mat-icon>
-              </button>
-              <button mat-icon-button matTooltip="Delete" (click)="deleteNode(node)">
-                <mat-icon>delete</mat-icon>
-              </button>
-            </div>
-          </div>
+          }
         }
       </div>
     }

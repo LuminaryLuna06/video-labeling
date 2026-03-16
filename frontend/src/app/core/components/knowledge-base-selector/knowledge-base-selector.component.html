@@ -1,5 +1,7 @@
 <div class="kb-selector-container">
-  <label class="selector-label">{{ label }}</label>
+  @if (label) {
+    <label class="selector-label">{{ label }}</label>
+  }
   
   <!-- Selected Items -->
   <div class="selected-items" (click)="openDropdown()">
@@ -18,11 +20,15 @@
       [(ngModel)]="searchQuery"
       (input)="filterNodes()"
       (focus)="openDropdown()"
-      (blur)="closeDropdown()"
       [placeholder]="selectedNodes.length > 0 ? 'Add more...' : ''"
     >
     <mat-icon class="dropdown-icon">{{ showDropdown ? 'expand_less' : 'expand_more' }}</mat-icon>
   </div>
+
+  <!-- Backdrop to close dropdown when clicking outside -->
+  @if (showDropdown) {
+    <div class="dropdown-backdrop" (click)="showDropdown = false"></div>
+  }
 
   <!-- Dropdown -->
   @if (showDropdown) {
@@ -30,7 +36,7 @@
       <!-- Dropdown Header with Close Button -->
       <div class="dropdown-header">
         <span class="dropdown-title">Select Knowledge</span>
-        <button class="dropdown-close-btn" (mousedown)="closeDropdown(); $event.preventDefault(); $event.stopPropagation()">
+        <button class="dropdown-close-btn" (click)="showDropdown = false; $event.stopPropagation()">
           <mat-icon>close</mat-icon>
         </button>
       </div>
@@ -45,7 +51,7 @@
 
       <!-- Quick Add Form -->
       @if (showQuickAddForm) {
-        <div class="quick-add-form" (click)="$event.stopPropagation()">
+        <div class="quick-add-form">
           <input
             class="quick-add-input"
             [(ngModel)]="quickAddName"
@@ -87,7 +93,7 @@
             <div 
               class="node-item"
               [class.selected]="isSelected(node)"
-              (mousedown)="selectNode(node); $event.preventDefault()"
+              (click)="selectNode(node)"
             >
               <div class="node-icon" [style.background]="getTypeColor(node.type) + '22'" [style.color]="getTypeColor(node.type)">
                 <mat-icon>{{ getTypeIcon(node.type) }}</mat-icon>
@@ -112,7 +118,7 @@
           <mat-icon>search_off</mat-icon>
           <span>No matching knowledge found</span>
           @if (showQuickAdd && searchQuery) {
-            <button class="create-btn" (mousedown)="toggleQuickAdd(); $event.preventDefault()">
+            <button class="create-btn" (click)="toggleQuickAdd()">
               Create "{{ searchQuery }}"
             </button>
           }

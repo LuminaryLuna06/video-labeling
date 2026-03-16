@@ -468,6 +468,263 @@
   }
 }
 
+// Table View
+.kb-table-container {
+  background: #1e2432;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.kb-table {
+  width: 100%;
+  border-collapse: collapse;
+
+  th, td {
+    text-align: left;
+    padding: 14px 16px;
+    border-bottom: 1px solid #2d3548;
+  }
+
+  thead {
+    background: #252d3d;
+
+    th {
+      font-size: 12px;
+      font-weight: 600;
+      color: #8b95a5;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+  }
+
+  tbody {
+    tr {
+      transition: background 0.2s;
+
+      &:hover {
+        background: #252d3d;
+
+        .action-buttons {
+          opacity: 1;
+        }
+      }
+
+      &:last-child td {
+        border-bottom: none;
+      }
+    }
+  }
+
+  .col-name {
+    width: 35%;
+    min-width: 250px;
+  }
+
+  .col-type {
+    width: 15%;
+    min-width: 120px;
+  }
+
+  .col-parent {
+    width: 20%;
+    min-width: 150px;
+  }
+
+  .col-tags {
+    width: 20%;
+    min-width: 150px;
+  }
+
+  .col-actions {
+    width: 10%;
+    min-width: 120px;
+    text-align: right;
+  }
+}
+
+.node-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  .tree-indent {
+    display: flex;
+    align-items: center;
+
+    .indent-icon {
+      font-size: 16px;
+      width: 16px;
+      height: 16px;
+      color: #5b6575;
+    }
+  }
+
+  .node-icon-mini {
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    mat-icon {
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+    }
+  }
+
+  .node-name-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+
+    .name {
+      font-size: 14px;
+      font-weight: 500;
+      color: #fff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .name-vi {
+      font-size: 12px;
+      color: #8b95a5;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+}
+
+.type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+
+  mat-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.parent-name {
+  font-size: 13px;
+  color: #8b95a5;
+}
+
+.no-parent {
+  color: #5b6575;
+}
+
+.tags-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+
+  .tag-chip {
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: #2d3548;
+    color: #8b95a5;
+  }
+
+  .more-tags {
+    font-size: 11px;
+    color: #5b6575;
+    padding: 3px 6px;
+  }
+}
+
+.action-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.2s;
+
+  button {
+    width: 32px;
+    height: 32px;
+    color: #8b95a5;
+
+    mat-icon {
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+    }
+
+    &:hover {
+      color: #3b82f6;
+    }
+
+    &:last-child:hover {
+      color: #ef4444;
+    }
+  }
+}
+
+// Table Pagination
+.table-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-top: 1px solid #2d3548;
+  background: #1a1f2c;
+
+  .pagination-info {
+    font-size: 13px;
+    color: #8b95a5;
+  }
+
+  .pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+
+    button {
+      color: #8b95a5;
+
+      &:hover:not(:disabled) {
+        color: #fff;
+        background: rgba(59, 130, 246, 0.1);
+      }
+
+      &:disabled {
+        color: #3d4555;
+      }
+    }
+
+    .page-btn {
+      min-width: 36px;
+      height: 36px;
+      padding: 0 8px;
+      border-radius: 8px;
+      font-size: 13px;
+
+      &.active {
+        background: rgba(59, 130, 246, 0.2);
+        color: #3b82f6;
+      }
+    }
+
+    .page-ellipsis {
+      color: #5b6575;
+      padding: 0 4px;
+    }
+  }
+}
+
 // Dialog Overlay
 .dialog-overlay {
   position: fixed;

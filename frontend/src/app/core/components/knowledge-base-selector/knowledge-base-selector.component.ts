@@ -105,7 +105,7 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
         this.selectedNodes = this.selectedNodes.filter(n => n.id !== node.id);
       } else {
         // Toggle on - add if not selected
-        this.selectedNodes.push(node);
+        this.selectedNodes = [...this.selectedNodes, node];
       }
       this.emitChange();
     } else {
@@ -164,13 +164,6 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
     this.filterNodes();
   }
 
-  closeDropdown(): void {
-    setTimeout(() => {
-      this.showDropdown = false;
-      this.showQuickAddForm = false;
-    }, 200);
-  }
-
   // Helpers
   getTypeColor(type: string): string {
     return this.kbTypes.find(t => t.value === type)?.color || '#64748b';
@@ -181,13 +174,18 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
   }
 
   // ControlValueAccessor implementation
-  writeValue(value: string[]): void {
-    if (value && Array.isArray(value)) {
-      // Store IDs and update selected nodes when nodes are loaded
-      this.updateSelectedNodesFromIds(value);
-    } else {
-      this.selectedNodes = [];
+  writeValue(value: any[]): void {
+    if (value && Array.isArray(value) && value.length > 0) {
+      // Check if value contains IDs (strings) or objects
+      if (typeof value[0] === 'string') {
+        this.updateSelectedNodesFromIds(value);
+      } else if (value[0].id) {
+        // Value contains objects, extract IDs
+        const ids = value.map((v: any) => v.id);
+        this.updateSelectedNodesFromIds(ids);
+      }
     }
+    // Don't reset selectedNodes if value is empty - it might be an initial empty binding
   }
 
   registerOnChange(fn: (value: string[]) => void): void {

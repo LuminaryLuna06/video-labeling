@@ -64,6 +64,7 @@ export class KnowledgeBaseComponent implements OnInit {
     this.kbService.getTree().subscribe({
       next: (tree) => {
         this.treeNodes = tree || [];
+        this.allNodes = this.flattenTree(this.treeNodes);
         this.extractRegions();
         this.loading = false;
         if (tree && tree.length === 0) {
@@ -75,6 +76,38 @@ export class KnowledgeBaseComponent implements OnInit {
         this.snackBar.open('Failed to load KB data: ' + (error?.error?.error || 'Unknown error'), 'Close', { duration: 3000 });
         this.loading = false;
         this.treeNodes = [];
+      }
+    });
+  }
+
+  private flattenTree(nodes: KBNode[]): KBNode[] {
+    const result: KBNode[] = [];
+    const walk = (list: KBNode[]): void => {
+      list.forEach(node => {
+        result.push(node);
+        if (node.children?.length) walk(node.children);
+      });
+    };
+    walk(nodes || []);
+    return result;
+  }
+
+  private refreshAfterSave(savedNode: KBNode): void {
+    this.searchQuery = '';
+    this.filterType = '';
+    this.filterRegion = '';
+    this.selectedNode = null;
+    this.loadData();
+
+    // Ensure saved node is visible immediately in list view.
+    this.kbService.getAllNodes().subscribe({
+      next: (nodes) => {
+        this.allNodes = nodes || [];
+        const updated = this.allNodes.find(n => n.id === savedNode.id);
+        if (updated) {
+          this.selectedNode = updated;
+          this.viewMode = 'list';
+        }
       }
     });
   }
@@ -144,7 +177,7 @@ export class KnowledgeBaseComponent implements OnInit {
         dialogRef.afterClosed().subscribe(result => {
           if (result) {
             this.snackBar.open('Node created!', 'Close', { duration: 2000 });
-            this.loadData();
+            this.refreshAfterSave(result);
           }
         });
       }
@@ -167,8 +200,7 @@ export class KnowledgeBaseComponent implements OnInit {
         dialogRef.afterClosed().subscribe(result => {
           if (result) {
             this.snackBar.open('Node updated!', 'Close', { duration: 2000 });
-            this.loadData();
-            this.selectedNode = null;
+            this.refreshAfterSave(result);
           }
         });
       }

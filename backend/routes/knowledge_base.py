@@ -2,16 +2,65 @@ from flask import Blueprint, request, jsonify, current_app
 from bson import ObjectId
 from datetime import datetime, timezone
 import re
+import unicodedata
+import uuid
+import requests
 from utils.auth_middleware import token_required
+from config import Config
+from utils.vector_store import upsert_embedding, search_embeddings
 
 knowledge_base_bp = Blueprint('knowledge_base', __name__)
 
 
 def generate_kb_id(name):
     """Generate a unique kb_id from name"""
-    # Convert to lowercase, replace spaces with underscores, remove special chars
-    kb_id = re.sub(r'[^a-z0-9_]', '', name.lower().replace(' ', '_'))
+    if not name:
+        return ''
+
+    # Normalize Vietnamese/Unicode to ASCII-friendly slug.
+    name = name.replace('đ', 'd').replace('Đ', 'D')
+    normalized = unicodedata.normalize('NFKD', name)
+    ascii_name = normalized.encode('ascii', 'ignore').decode('ascii')
+    ascii_name = ascii_name.lower().strip()
+    ascii_name = re.sub(r'\s+', '_', ascii_name)
+    kb_id = re.sub(r'[^a-z0-9_]', '', ascii_name)
+    kb_id = re.sub(r'_+', '_', kb_id).strip('_')
+
+    if not kb_id:
+        kb_id = f"node_{uuid.uuid4().hex[:8]}"
+
     return kb_id
+
+
+def generate_unique_kb_id(base_name: str, exclude_node_id=None):
+    """Generate a unique kb_id, optionally excluding one existing node id."""
+    base_kb_id = generate_kb_id(base_name)
+    kb_id = base_kb_id
+    i = 2
+
+    while True:
+        existing = current_app.db.knowledge_base.find_one({'kb_id': kb_id})
+        if not existing:
+            return kb_id
+        if exclude_node_id and str(existing.get('_id')) == str(exclude_node_id):
+            return kb_id
+        kb_id = f"{base_kb_id}_{i}"
+        i += 1
+
+
+def _parse_related_ids(data):
+    """Accept both related_kb_ids and related_ids from FE and convert to ObjectId list."""
+    raw_ids = data.get('related_kb_ids')
+    if raw_ids is None:
+        raw_ids = data.get('related_ids', [])
+
+    related_ids = []
+    for rid in raw_ids or []:
+        try:
+            related_ids.append(ObjectId(rid))
+        except Exception:
+            pass
+    return related_ids
 
 
 def serialize_kb_node(node):
@@ -28,7 +77,10 @@ def serialize_kb_node(node):
         'description_vi': node.get('description_vi', ''),
         'visual_cues': node.get('visual_cues', ''),
         'visual_cues_vi': node.get('visual_cues_vi', ''),
+        'region': node.get('region', ''),
+        'confidence_level': node.get('confidence_level', 'optional'),
         'related_kb_ids': [str(rid) for rid in node.get('related_kb_ids', [])],
+        'related_ids': [str(rid) for rid in node.get('related_kb_ids', [])],
         'tags': node.get('tags', []),
         'created_at': node['created_at'].isoformat() if node.get('created_at') else None,
         'updated_at': node['updated_at'].isoformat() if node.get('updated_at') else None
@@ -83,7 +135,10 @@ def get_all_kb_nodes():
     if search:
         query['$or'] = [
             {'name': {'$regex': search, '$options': 'i'}},
+            {'name_vi': {'$regex': search, '$options': 'i'}},
             {'kb_id': {'$regex': search, '$options': 'i'}},
+            {'description': {'$regex': search, '$options': 'i'}},
+            {'description_vi': {'$regex': search, '$options': 'i'}},
             {'tags': {'$regex': search, '$options': 'i'}}
         ]
     if node_type:
@@ -126,15 +181,8 @@ def create_kb_node():
     if not data or not data.get('name'):
         return jsonify({'error': 'Name is required'}), 400
     
-    # Generate kb_id from name
-    kb_id = generate_kb_id(data['name'])
-    
-    # Check if kb_id already exists
-    existing = current_app.db.knowledge_base.find_one({'kb_id': kb_id})
-    if existing:
-        # Append a number to make it unique
-        count = current_app.db.knowledge_base.count_documents({'kb_id': {'$regex': f'^{kb_id}'}})
-        kb_id = f"{kb_id}_{count + 1}"
+    # Generate unique kb_id from name
+    kb_id = generate_unique_kb_id(data['name'])
     
     # Handle parent_id
     parent_id = None
@@ -144,22 +192,22 @@ def create_kb_node():
         except Exception:
             return jsonify({'error': 'Invalid parent_id'}), 400
     
-    # Handle related_kb_ids
-    related_kb_ids = []
-    for rid in data.get('related_kb_ids', []):
-        try:
-            related_kb_ids.append(ObjectId(rid))
-        except Exception:
-            pass
+    # Handle related ids (supports both related_kb_ids and related_ids)
+    related_kb_ids = _parse_related_ids(data)
     
     node = {
         'kb_id': kb_id,
         'name': data['name'],
+        'name_vi': data.get('name_vi', ''),
         'type': data.get('type', 'concept'),
         'parent_id': parent_id,
         'children_ids': [],
         'description': data.get('description', ''),
+        'description_vi': data.get('description_vi', ''),
         'visual_cues': data.get('visual_cues', ''),
+        'visual_cues_vi': data.get('visual_cues_vi', ''),
+        'region': data.get('region', ''),
+        'confidence_level': data.get('confidence_level', 'optional'),
         'related_kb_ids': related_kb_ids,
         'tags': data.get('tags', []),
         'created_at': datetime.now(timezone.utc),
@@ -196,30 +244,40 @@ def update_kb_node(node_id):
     
     update_data = {'updated_at': datetime.now(timezone.utc)}
     
-    if 'name' in data:
+    if 'name' in data and data['name']:
         update_data['name'] = data['name']
-        # Update kb_id based on new name
-        update_data['kb_id'] = generate_kb_id(data['name'])
+        # Update kb_id with uniqueness check (exclude current node)
+        update_data['kb_id'] = generate_unique_kb_id(data['name'], exclude_node_id=node_id)
+
+    if 'name_vi' in data:
+        update_data['name_vi'] = data['name_vi']
     
     if 'type' in data:
         update_data['type'] = data['type']
     
     if 'description' in data:
         update_data['description'] = data['description']
+
+    if 'description_vi' in data:
+        update_data['description_vi'] = data['description_vi']
     
     if 'visual_cues' in data:
         update_data['visual_cues'] = data['visual_cues']
+
+    if 'visual_cues_vi' in data:
+        update_data['visual_cues_vi'] = data['visual_cues_vi']
+
+    if 'region' in data:
+        update_data['region'] = data['region']
+
+    if 'confidence_level' in data:
+        update_data['confidence_level'] = data['confidence_level']
     
     if 'tags' in data:
         update_data['tags'] = data['tags']
     
-    if 'related_kb_ids' in data:
-        related_ids = []
-        for rid in data['related_kb_ids']:
-            try:
-                related_ids.append(ObjectId(rid))
-            except Exception:
-                pass
+    if 'related_kb_ids' in data or 'related_ids' in data:
+        related_ids = _parse_related_ids(data)
         update_data['related_kb_ids'] = related_ids
     
     # Handle parent change
@@ -244,10 +302,13 @@ def update_kb_node(node_id):
             
             update_data['parent_id'] = new_parent_id
     
-    current_app.db.knowledge_base.update_one(
-        {'_id': ObjectId(node_id)},
-        {'$set': update_data}
-    )
+    try:
+        current_app.db.knowledge_base.update_one(
+            {'_id': ObjectId(node_id)},
+            {'$set': update_data}
+        )
+    except Exception as e:
+        return jsonify({'error': f'Failed to update KB node: {str(e)}'}), 400
     
     updated_node = current_app.db.knowledge_base.find_one({'_id': ObjectId(node_id)})
     return jsonify(serialize_kb_node(updated_node))
@@ -334,22 +395,21 @@ def quick_create_kb_node():
     if not data or not data.get('name'):
         return jsonify({'error': 'Name is required'}), 400
     
-    kb_id = generate_kb_id(data['name'])
-    
-    # Check if kb_id already exists
-    existing = current_app.db.knowledge_base.find_one({'kb_id': kb_id})
-    if existing:
-        count = current_app.db.knowledge_base.count_documents({'kb_id': {'$regex': f'^{kb_id}'}})
-        kb_id = f"{kb_id}_{count + 1}"
+    kb_id = generate_unique_kb_id(data['name'])
     
     node = {
         'kb_id': kb_id,
         'name': data['name'],
+        'name_vi': data.get('name_vi', ''),
         'type': data.get('type', 'concept'),
         'parent_id': None,
         'children_ids': [],
         'description': data.get('description', ''),
+        'description_vi': data.get('description_vi', ''),
         'visual_cues': data.get('visual_cues', ''),
+        'visual_cues_vi': data.get('visual_cues_vi', ''),
+        'region': data.get('region', ''),
+        'confidence_level': data.get('confidence_level', 'optional'),
         'related_kb_ids': [],
         'tags': data.get('tags', []),
         'created_at': datetime.now(timezone.utc),
@@ -441,3 +501,225 @@ def get_kb_context():
         'context_text': '\n'.join(context_parts_en),
         'context_text_vi': '\n'.join(context_parts_vi)
     })
+
+
+# ==================== KB NODE INDEXING ====================
+
+@knowledge_base_bp.route('/<node_id>/index', methods=['POST'])
+@token_required
+def index_kb_node(node_id):
+    """
+    Index a KB node with its representative image using DINOv2 embeddings.
+    """
+    try:
+        node = current_app.db.knowledge_base.find_one({'_id': ObjectId(node_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid node ID'}), 400
+
+    if not node:
+        return jsonify({'error': 'KB node not found'}), 404
+
+    data = request.get_json() or {}
+    image_base64 = data.get('image')  # Representative image for this KB node
+    
+    if not image_base64:
+        return jsonify({'error': 'image required - provide a representative image for this KB node'}), 400
+
+    try:
+        response = requests.post(
+            f"{Config.DAM_SERVER_URL}/embed",
+            json={'image': image_base64, 'entity_id': str(node_id), 'entity_type': 'kb_node'},
+            timeout=60,
+        )
+        if response.status_code != 200:
+            return jsonify({'error': f'Embedding failed: {response.text}'}), 500
+
+        emb = response.json().get('embedding')
+        if not emb:
+            return jsonify({'error': 'Embedding payload missing'}), 500
+        faiss_idx = upsert_embedding(
+            current_app.db,
+            str(node_id),
+            'kb_node',
+            emb,
+            {
+                'name': node.get('name', ''),
+                'description': node.get('description', ''),
+                'visual_cues': node.get('visual_cues', ''),
+                'type': node.get('type', 'concept'),
+            },
+        )
+        
+        # Update node with indexing info
+        current_app.db.knowledge_base.update_one(
+            {'_id': ObjectId(node_id)},
+            {
+                '$set': {
+                    'indexed': True,
+                    'indexed_at': datetime.now(timezone.utc),
+                    'updated_at': datetime.now(timezone.utc)
+                }
+            }
+        )
+        
+        return jsonify({
+            'success': True,
+            'node_id': node_id,
+            'faiss_idx': faiss_idx
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@knowledge_base_bp.route('/index/batch', methods=['POST'])
+@token_required
+def batch_index_kb_nodes():
+    """
+    Batch index multiple KB nodes with their images.
+    Request body: {nodes: [{id: string, image: base64_string}]}
+    """
+    data = request.get_json()
+    nodes = data.get('nodes', [])
+    
+    if not nodes:
+        return jsonify({'error': 'nodes array required'}), 400
+    
+    results = []
+    
+    for node_data in nodes:
+        node_id = node_data.get('id')
+        image_base64 = node_data.get('image')
+        
+        if not node_id or not image_base64:
+            results.append({
+                'node_id': node_id,
+                'success': False,
+                'error': 'id and image required'
+            })
+            continue
+        
+        try:
+            node = current_app.db.knowledge_base.find_one({'_id': ObjectId(node_id)})
+            if not node:
+                results.append({
+                    'node_id': node_id,
+                    'success': False,
+                    'error': 'Node not found'
+                })
+                continue
+            
+            response = requests.post(
+                f"{Config.DAM_SERVER_URL}/embed",
+                json={'image': image_base64, 'entity_id': str(node_id), 'entity_type': 'kb_node'},
+                timeout=60,
+            )
+
+            if response.status_code == 200:
+                emb = response.json().get('embedding')
+                if not emb:
+                    results.append({'node_id': node_id, 'success': False, 'error': 'Embedding payload missing'})
+                    continue
+                upsert_embedding(
+                    current_app.db,
+                    str(node_id),
+                    'kb_node',
+                    emb,
+                    {
+                        'name': node.get('name', ''),
+                        'description': node.get('description', ''),
+                        'visual_cues': node.get('visual_cues', ''),
+                        'type': node.get('type', 'concept'),
+                    },
+                )
+                current_app.db.knowledge_base.update_one(
+                    {'_id': ObjectId(node_id)},
+                    {
+                        '$set': {
+                            'indexed': True,
+                            'indexed_at': datetime.now(timezone.utc)
+                        }
+                    }
+                )
+                results.append({
+                    'node_id': node_id,
+                    'success': True
+                })
+            else:
+                results.append({
+                    'node_id': node_id,
+                    'success': False,
+                    'error': response.text
+                })
+                
+        except Exception as e:
+            results.append({
+                'node_id': node_id,
+                'success': False,
+                'error': str(e)
+            })
+    
+    return jsonify({
+        'results': results,
+        'total': len(results),
+        'success_count': sum(1 for r in results if r.get('success'))
+    })
+
+
+@knowledge_base_bp.route('/search/visual', methods=['POST'])
+@token_required
+def search_kb_visual():
+    """
+    Search KB nodes using visual similarity (DINOv2 embeddings).
+    """
+    data = request.get_json()
+    if not data or not data.get('query_image'):
+        return jsonify({'error': 'query_image required'}), 400
+    
+    try:
+        response = requests.post(
+            f"{Config.DAM_SERVER_URL}/embed",
+            json={
+                'image': data['query_image'],
+                'mask': data.get('query_mask'),
+            },
+            timeout=60
+        )
+        if response.status_code != 200:
+            return jsonify({'error': f'Embedding failed: {response.text}'}), 500
+
+        emb = response.json().get('embedding')
+        search_results = {
+            'results': search_embeddings(
+                current_app.db,
+                emb,
+                top_k=data.get('top_k', 10),
+                entity_types=['kb_node'],
+            )
+        }
+        
+        # Enrich results with KB node details
+        enriched_results = []
+        for result in search_results.get('results', []):
+            try:
+                node = current_app.db.knowledge_base.find_one({'_id': ObjectId(result['entity_id'])})
+                if node:
+                    enriched_results.append({
+                        'node': serialize_kb_node(node),
+                        'score': result['score'],
+                        'ancestors': get_ancestors(node['_id'], current_app.db)
+                    })
+            except Exception:
+                pass
+        
+        return jsonify({
+            'results': enriched_results,
+            'total': len(enriched_results)
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500

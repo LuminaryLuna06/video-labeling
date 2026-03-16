@@ -170,4 +170,116 @@ export class VideoService {
   withdrawReview(videoId: string): Observable<any> {
     return this.http.post(`${this.API}/${videoId}/withdraw-review`, {});
   }
+
+  // ---- AI Video Processing ----
+  /**
+   * Process video using DAM + DINOv2 + Gemini
+   * - Extract 16 frames
+   * - Search KB for each frame
+   * - Get visual description from DAM
+   * - Combine with Gemini for final description
+   */
+  processVideoAI(videoId: string, options?: {
+    num_frames?: number;
+    prompt?: string;
+    use_gemini?: boolean;
+  }): Observable<VideoProcessingResult> {
+    return this.http.post<VideoProcessingResult>(`${this.API}/${videoId}/process`, options || {});
+  }
+
+  /**
+   * Demo endpoint: upload a local video and return generated description.
+   */
+  processVideoDemo(file: File, options?: {
+    num_frames?: number;
+    prompt?: string;
+    use_gemini?: boolean;
+  }): Observable<VideoProcessingResult> {
+    const formData = new FormData();
+    formData.append('video', file);
+    if (options?.num_frames !== undefined) formData.append('num_frames', String(options.num_frames));
+    if (options?.prompt) formData.append('prompt', options.prompt);
+    if (options?.use_gemini !== undefined) formData.append('use_gemini', String(options.use_gemini));
+    return this.http.post<VideoProcessingResult>(`${this.API}/demo/process`, formData);
+  }
+
+  /**
+   * Index video frames for similarity search
+   */
+  indexVideo(videoId: string): Observable<{ success: boolean; indexed_frames: number }> {
+    return this.http.post<{ success: boolean; indexed_frames: number }>(`${this.API}/${videoId}/index`, {});
+  }
+
+  /**
+   * Search for similar videos using an image query
+   */
+  searchByImage(queryImage: string, topK = 20): Observable<VideoSearchResult> {
+    return this.http.post<VideoSearchResult>(`${this.API}/search`, {
+      query_image: queryImage,
+      top_k: topK
+    });
+  }
+}
+
+// ---- Types for AI Processing ----
+export interface VideoProcessingResult {
+  num_frames: number;
+  dam_description: string;
+  frame_knowledge: FrameKnowledge[];
+  frame_similar_images?: FrameSimilarImages[];
+  aggregated_knowledge: KnowledgeMatch[];
+  similar_images?: SimilarImageMatch[];
+  similar_images_message?: string;
+  retrieval_debug?: RetrievalDebugInfo;
+  english_description?: string;
+  vietnamese_description?: string;
+  final_description?: string;
+  gemini_description?: string;
+  gemini_error?: string;
+  gemini_prompt?: string;
+}
+
+export interface FrameKnowledge {
+  frame_idx: number;
+  knowledge: KnowledgeMatch[];
+}
+
+export interface KnowledgeMatch {
+  name: string;
+  name_vi?: string;
+  description: string;
+  description_vi?: string;
+  score: number;
+}
+
+export interface SimilarImageMatch {
+  image_id: string;
+  filename: string;
+  original_name: string;
+  url: string;
+  project_id?: string | null;
+  score: number;
+}
+
+export interface FrameSimilarImages {
+  frame_idx: number;
+  images: SimilarImageMatch[];
+}
+
+export interface RetrievalDebugInfo {
+  image_embedding_count: number;
+  kb_embedding_count: number;
+  similar_images_count: number;
+  knowledge_hits_count: number;
+}
+
+export interface VideoSearchResult {
+  results: VideoSearchMatch[];
+  total: number;
+}
+
+export interface VideoSearchMatch {
+  video: VideoItem;
+  score: number;
+  frame_matches: { frame_index: number; score: number }[];
 }

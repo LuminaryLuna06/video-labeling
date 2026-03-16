@@ -28,13 +28,17 @@ export interface Project {
   id: string;
   name: string;
   description: string;
+  project_type: 'video' | 'image';
+  task_type?: 'object_detection' | 'classification' | 'captioning' | 'qa' | 'segmentation';
   status: string;
   created_by: string;
   creator_name?: string;
   subpart_count?: number;
   video_count?: number;
+  image_count?: number;
   subparts?: SubPart[];
   videos?: VideoItem[];
+  images?: ImageItem[];
   created_at: string;
   updated_at: string;
 }
@@ -54,6 +58,7 @@ export interface SubPart {
   order: number;
   status: string;
   video_count?: number;
+  image_count?: number;
   created_at: string;
 }
 
@@ -158,6 +163,7 @@ export interface Caption {
   contextual_caption_vi: string;
   knowledge_caption_vi: string;
   combined_caption_vi: string;
+  knowledge_base_ids?: string[];
   created_at?: string;
   updated_at?: string;
 }
@@ -173,5 +179,126 @@ export interface Tag {
   project_id: string;
   name: string;
   color: string;
+  created_at: string;
+}
+
+// ============ IMAGE ANNOTATION MODELS ============
+
+export interface ImageItem {
+  id: string;
+  project_id?: string;
+  filename: string;
+  original_name: string;
+  file_size: number;
+  width: number;
+  height: number;
+  status: string;
+  current_step: number;
+  subpart_id?: string;
+  url: string;
+  thumbnail_url?: string;
+  tags?: string[];
+  uploaded_by: string;
+  annotators?: string[];
+  annotator_details?: User[];
+  review_status?: string;
+  review_comment?: string;
+  reviewed_by?: string;
+  reviews?: ReviewEntry[];
+  reviews_with_details?: ReviewWithDetails[];
+  reviewers?: string[];
+  reviewer_details_list?: User[];
+  regions_count?: number;
+  region_labels?: string[];
+  captions_count?: number;
+  qa_count?: number;
+  has_caption?: boolean;
+  has_classification?: boolean;
+  indexed?: boolean;
+  indexed_regions?: number;
+  object_indexed_count?: number;
+  objects_indexed_complete?: boolean;
+  indexed_at?: string | null;
+  classification?: ImageClassification;
+  regions?: ImageRegion[];
+  image_caption?: Caption;
+  qa_pairs?: ImageQA[];
+  knowledge_base_ids?: string[];  // KB linkage for image
+  created_at: string;
+}
+
+export interface ImageRegion {
+  id: string;
+  image_id: string;
+  label: string;
+  color: string;
+  category_id?: string;
+  category_name?: string;
+  bbox?: number[];  // [x, y, width, height]
+  segmentation_mask: string;
+  brush_mask: string;
+  has_caption?: boolean;
+  caption?: Caption;
+  indexed?: boolean;
+  indexed_at?: string | null;
+  knowledge_base_ids?: string[];  // KB linkage for region/object
+  created_at: string;
+}
+
+export interface ImageClassification {
+  labels: string[];
+  primary_label: string;
+  confidence?: number;
+  notes?: string;
+}
+
+export interface ImageQA {
+  id: string;
+  image_id?: string;
+  question: string;
+  answer: string;
+  question_vi: string;
+  answer_vi: string;
+  qa_type: string;  // general, visual, contextual, etc.
+  created_at: string;
+}
+
+export interface ImageQCStats {
+  total_images: number;
+  by_status: {
+    pending: number;
+    approved: number;
+    rejected: number;
+    not_submitted: number;
+  };
+  by_project: { [key: string]: { total: number; approved: number; rejected: number; pending: number } };
+  by_user: UserStats[];
+  recent_reviews: ImageReviewItem[];
+  pending_reviews: ImagePendingReviewItem[];
+}
+
+export interface UserStats {
+  id: string;
+  name: string;
+  color: string;
+  total_reviews: number;
+  approved: number;
+  rejected: number;
+}
+
+export interface ImageReviewItem {
+  image_id: string;
+  image_name: string;
+  project_name: string;
+  reviewer_name: string;
+  reviewer_color: string;
+  status: string;
+  reviewed_at: string;
+}
+
+export interface ImagePendingReviewItem {
+  image_id: string;
+  image_name: string;
+  project_name: string;
   created_at: string;
 }

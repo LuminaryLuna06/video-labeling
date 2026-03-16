@@ -1,0 +1,768 @@
+<div class="image-editor">
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="toolbar-left">
+      <button mat-icon-button (click)="goBack()" matTooltip="Back to Dashboard">
+        <mat-icon>arrow_back</mat-icon>
+      </button>
+      <span class="image-name">{{ image?.original_name || 'Loading...' }}</span>
+      <span class="review-badge" [ngClass]="getReviewStatusClass()">
+        {{ image?.review_status || 'not_submitted' }}
+      </span>
+    </div>
+
+    <div class="toolbar-center">
+      <!-- Image Navigation -->
+      <div class="image-navigation">
+        <button mat-icon-button (click)="goToPreviousImage()" [disabled]="!hasPreviousImage" matTooltip="Previous Image (←)">
+          <mat-icon>chevron_left</mat-icon>
+        </button>
+        <span class="image-counter">{{ currentImageIndex + 1 }} / {{ projectImages.length }}</span>
+        <button mat-icon-button (click)="goToNextImage()" [disabled]="!hasNextImage" matTooltip="Next Image (→)">
+          <mat-icon>chevron_right</mat-icon>
+        </button>
+      </div>
+
+      @if (!projectLoading && !singleTaskMode) {
+        <div class="step-indicators">
+          @for (step of steps; track step; let i = $index) {
+            <div class="step" [class.active]="currentStep === i + 1" [class.completed]="currentStep > i + 1" (click)="setStep(i + 1)">
+              <span class="step-number">{{ i + 1 }}</span>
+              <span class="step-label">{{ step }}</span>
+            </div>
+            @if (i < steps.length - 1) {
+              <div class="step-connector" [class.completed]="currentStep > i + 1"></div>
+            }
+          }
+        </div>
+      }
+    </div>
+
+    <div class="toolbar-right">
+      <button mat-icon-button [matMenuTriggerFor]="exportMenu" matTooltip="Export Project">
+        <mat-icon>download</mat-icon>
+      </button>
+      <mat-menu #exportMenu="matMenu">
+        <button mat-menu-item (click)="exportProject('json')">
+          <mat-icon>description</mat-icon>
+          <span>Export JSON</span>
+        </button>
+        @if (taskType === 'object_detection' || taskType === 'segmentation') {
+          <button mat-menu-item (click)="exportProject('yolo')">
+            <mat-icon>grid_on</mat-icon>
+            <span>Export YOLO Format</span>
+          </button>
+          <button mat-menu-item (click)="exportProject('coco')">
+            <mat-icon>dataset</mat-icon>
+            <span>Export COCO Format</span>
+          </button>
+        }
+        @if (taskType === 'classification' || taskType === 'captioning' || taskType === 'qa') {
+          <button mat-menu-item (click)="exportProject('csv')">
+            <mat-icon>table_chart</mat-icon>
+            <span>Export CSV</span>
+          </button>
+        }
+      </mat-menu>
+
+      <button mat-icon-button (click)="openEditProjectDialog()" matTooltip="Edit Project">
+        <mat-icon>edit</mat-icon>
+      </button>
+
+      <button mat-icon-button (click)="openSettings()" matTooltip="Settings">
+        <mat-icon>settings</mat-icon>
+      </button>
+
+      <button mat-icon-button [matMenuTriggerFor]="userMenu">
+        <mat-icon>account_circle</mat-icon>
+      </button>
+      <mat-menu #userMenu="matMenu">
+        <div mat-menu-item disabled>{{ user()?.full_name }}</div>
+        <button mat-menu-item (click)="goBack()">
+          <mat-icon>logout</mat-icon>
+          <span>Back to Dashboard</span>
+        </button>
+      </mat-menu>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="editor-content">
+    <!-- Canvas Area -->
+    <div class="canvas-area" #canvasArea (wheel)="onWheel($event)">
+      <div class="canvas-container" 
+           [style.transform]="'scale(' + zoomLevel + ') translate(' + panX + 'px, ' + panY + 'px)'"
+           (mousedown)="panMode ? startPan($event) : startDraw($event)"
+           (mousemove)="panMode ? doPan($event) : draw($event)"
+           (mouseup)="panMode ? endPan() : stopDraw()"
+           (mouseleave)="panMode ? endPan() : stopDraw()">
+        <canvas #imageCanvas class="image-canvas"></canvas>
+        <canvas #drawCanvas class="draw-canvas"></canvas>
+        <canvas #maskCanvas class="mask-canvas"></canvas>
+      </div>
+
+      <!-- Zoom Controls -->
+      <div class="zoom-controls">
+        <button mat-icon-button [class.active]="panMode" (click)="panMode = !panMode" matTooltip="Pan/Move (Hold Space)">
+          <mat-icon>pan_tool</mat-icon>
+        </button>
+        <div class="zoom-divider"></div>
+        <button mat-icon-button (click)="zoomOut()" matTooltip="Zoom Out">
+          <mat-icon>remove</mat-icon>
+        </button>
+        <span class="zoom-level">{{ (zoomLevel * 100).toFixed(0) }}%</span>
+        <button mat-icon-button (click)="zoomIn()" matTooltip="Zoom In">
+          <mat-icon>add</mat-icon>
+        </button>
+        <button mat-icon-button (click)="resetZoom()" matTooltip="Fit to Screen">
+          <mat-icon>fit_screen</mat-icon>
+        </button>
+      </div>
+
+      <!-- Tools Panel (Object Detection) - Horizontal at top -->
+      @if (!projectLoading && getCurrentStepType() === 'object_detection') {
+        <div class="tools-panel horizontal">
+          <div class="tool-group">
+            <span class="group-label">Tools</span>
+            <div class="tool-buttons horizontal">
+              <button mat-mini-fab class="active" matTooltip="Bounding Box (R)">
+                <mat-icon>crop_square</mat-icon>
+              </button>
+            </div>
+          </div>
+
+          <div class="tool-divider"></div>
+
+          <div class="tool-group">
+            <span class="group-label">Label</span>
+            <div class="label-input-group horizontal">
+              <input type="text" [(ngModel)]="currentRegionLabel" class="label-text-input" placeholder="Label..." />
+              <input type="color" [(ngModel)]="currentRegionColor" class="label-color-input" />
+            </div>
+          </div>
+        </div>
+      }
+
+      <!-- Tools Panel (Segmentation) - Horizontal at top -->
+      @if (!projectLoading && getCurrentStepType() === 'segmentation') {
+        <div class="tools-panel horizontal">
+          <div class="tool-group">
+            <span class="group-label">Tools</span>
+            <div class="tool-buttons horizontal">
+              <button mat-mini-fab [class.active]="brushMode === 'draw'" (click)="setBrushMode('draw')" matTooltip="Brush (B)">
+                <mat-icon>brush</mat-icon>
+              </button>
+              <button mat-mini-fab [class.active]="brushMode === 'erase'" (click)="setBrushMode('erase')" matTooltip="Eraser (E)">
+                <mat-icon>auto_fix_off</mat-icon>
+              </button>
+            </div>
+          </div>
+
+          <div class="tool-divider"></div>
+
+          <div class="tool-group">
+            <span class="group-label">Size</span>
+            <div class="brush-slider horizontal">
+              <input type="range" [(ngModel)]="brushSize" min="5" max="100" />
+              <span class="size-value">{{ brushSize }}px</span>
+            </div>
+          </div>
+
+          <div class="tool-divider"></div>
+
+          <div class="tool-group">
+            <span class="group-label">Label</span>
+            <div class="label-input-group horizontal">
+              <input type="text" [(ngModel)]="currentRegionLabel" class="label-text-input" placeholder="Label..." />
+              <input type="color" [(ngModel)]="currentRegionColor" class="label-color-input" />
+            </div>
+          </div>
+
+          <div class="tool-divider"></div>
+
+          <div class="tool-group actions">
+            @if (hasDrawing) {
+              <button mat-flat-button color="primary" class="segment-btn" (click)="segmentObject()" [disabled]="segmenting">
+                @if (segmenting) {
+                  <mat-spinner diameter="18"></mat-spinner>
+                } @else {
+                  <mat-icon>auto_fix_high</mat-icon>
+                  Segment
+                }
+              </button>
+            }
+            <button mat-stroked-button class="clear-btn" (click)="clearDrawCanvas()" [disabled]="!hasDrawing">
+              <mat-icon>delete_outline</mat-icon>
+              Clear
+            </button>
+          </div>
+        </div>
+      }
+
+      <!-- Tools Panel (Captioning - Region mode) - Horizontal at top -->
+      @if (!projectLoading && getCurrentStepType() === 'captioning') {
+        <div class="tools-panel horizontal">
+          <div class="tool-group">
+            <span class="group-label">Tools</span>
+            <div class="tool-buttons horizontal">
+              <button mat-mini-fab [class.active]="activeTool === 'bbox'" (click)="activeTool = 'bbox'" matTooltip="Bounding Box (B)">
+                <mat-icon>crop_square</mat-icon>
+              </button>
+              <button mat-mini-fab [class.active]="activeTool === 'brush'" (click)="activeTool = 'brush'" matTooltip="Brush (P)">
+                <mat-icon>brush</mat-icon>
+              </button>
+              <button mat-mini-fab [class.active]="activeTool === 'eraser'" (click)="activeTool = 'eraser'" matTooltip="Eraser (E)">
+                <mat-icon>auto_fix_off</mat-icon>
+              </button>
+            </div>
+          </div>
+
+          <div class="tool-divider"></div>
+
+          <div class="tool-group">
+            <span class="group-label">Size</span>
+            <div class="brush-slider horizontal">
+              <input type="range" [(ngModel)]="brushSize" min="5" max="100" />
+              <span class="size-value">{{ brushSize }}px</span>
+            </div>
+          </div>
+
+          <div class="tool-divider"></div>
+
+          <div class="tool-group">
+            <span class="group-label">Label</span>
+            <div class="label-input-group horizontal">
+              <input type="text" [(ngModel)]="currentRegionLabel" class="label-text-input" placeholder="Label..." />
+              <input type="color" [(ngModel)]="currentRegionColor" class="label-color-input" />
+            </div>
+          </div>
+
+          <div class="tool-divider"></div>
+
+          <div class="tool-group actions">
+            @if (hasDrawing) {
+              <button mat-flat-button color="primary" class="segment-btn" (click)="segmentObject()" [disabled]="segmenting">
+                @if (segmenting) {
+                  <mat-spinner diameter="18"></mat-spinner>
+                } @else {
+                  <mat-icon>auto_fix_high</mat-icon>
+                  Segment
+                }
+              </button>
+            }
+            <button mat-stroked-button class="clear-btn" (click)="clearDrawCanvas()" [disabled]="!hasDrawing">
+              <mat-icon>delete_outline</mat-icon>
+              Clear
+            </button>
+          </div>
+        </div>
+      }
+    </div>
+
+    <!-- Side Panel -->
+    <div class="side-panel" [style.width.px]="panelWidth">
+      <div class="panel-resize-handle" (mousedown)="startPanelResize($event)"></div>
+
+      <!-- Object Detection / Segmentation Panel -->
+      @if (getCurrentStepType() === 'object_detection' || getCurrentStepType() === 'segmentation') {
+        <div class="panel-content">
+          <div class="panel-header">
+            <h3>{{ getCurrentStepType() === 'segmentation' ? 'Segmentation Regions' : 'Object Regions' }}</h3>
+          </div>
+
+          <!-- Image-level KB Selector (only for Object Detection) -->
+          @if (getCurrentStepType() === 'object_detection') {
+
+            <div class="quick-labels-section">
+            <span class="section-label">KNOWLEDGE</span>
+            <app-knowledge-base-selector
+                label=""
+                placeholder="Search & select knowledge..."
+                [(ngModel)]="imageKBIds"
+                [multiple]="true"
+                [showQuickAdd]="true"
+                (selectionChange)="onImageKBChange($event)">
+              </app-knowledge-base-selector>
+          </div>
+
+             
+          }
+          
+          <!-- Quick Labels -->
+          <div class="quick-labels-section">
+            <span class="section-label">Quick Labels</span>
+            <div class="quick-labels-list">
+              @for (label of uniqueLabels; track label) {
+                <button mat-stroked-button [class.active]="currentRegionLabel === label" (click)="selectPredefinedLabel(label)">
+                  {{ label }}
+                </button>
+              }
+            </div>
+          </div>
+
+          <!-- Current Label -->
+          <div class="current-label-section">
+            <span class="section-label">Current Label</span>
+            <div class="current-label-display">
+              <div class="label-color" [style.background-color]="currentRegionColor"></div>
+              <span>{{ currentRegionLabel }}</span>
+              <input type="color" [(ngModel)]="currentRegionColor" class="mini-color-picker" />
+            </div>
+          </div>
+
+          <!-- Regions List with Inline Editing -->
+          <div class="regions-section">
+            <span class="section-label">Regions ({{ regions.length }})</span>
+            <div class="regions-list">
+              @for (region of regions; track region.id) {
+                <div class="region-item" [class.selected]="selectedRegion?.id === region.id" [class.editing]="editingRegionId === region.id">
+                  @if (editingRegionId === region.id) {
+                    <!-- Inline Edit Mode -->
+                    <input type="color" 
+                           [(ngModel)]="editingRegionColor" 
+                           class="region-color-input" />
+                    <select class="region-label-select" [(ngModel)]="editingRegionLabel">
+                      @for (label of uniqueLabels; track label) {
+                        <option [value]="label">{{ label }}</option>
+                      }
+                    </select>
+                    <div class="edit-actions">
+                      <button mat-icon-button (click)="saveRegionEdit(region)" matTooltip="Save">
+                        <mat-icon>check</mat-icon>
+                      </button>
+                      <button mat-icon-button (click)="cancelRegionEdit()" matTooltip="Cancel">
+                        <mat-icon>close</mat-icon>
+                      </button>
+                    </div>
+                  } @else {
+                    <!-- View Mode -->
+                    <div class="region-color" [style.background-color]="region.color"></div>
+                    <span class="region-label" (click)="selectRegion(region)">{{ region.label }}</span>
+                    @if (region.bbox) {
+                      <mat-icon class="region-type" matTooltip="Bounding Box">crop_square</mat-icon>
+                    }
+                    @if (region.segmentation_mask) {
+                      <mat-icon class="region-type" matTooltip="Segmentation">auto_fix_high</mat-icon>
+                    }
+                    <div class="region-actions">
+                      <button mat-icon-button (click)="startRegionEdit(region); $event.stopPropagation()" matTooltip="Edit">
+                        <mat-icon>edit</mat-icon>
+                      </button>
+                      <button mat-icon-button (click)="deleteRegion(region); $event.stopPropagation()" matTooltip="Delete">
+                        <mat-icon>delete</mat-icon>
+                      </button>
+                    </div>
+                  }
+                </div>
+              }
+
+              @if (regions.length === 0) {
+                <p class="empty-message">
+                  @if (getCurrentStepType() === 'object_detection') {
+                    Draw bounding boxes on the image to create regions.
+                  } @else {
+                    Use brush to mark objects, then click Segment.
+                  }
+                </p>
+              }
+            </div>
+          </div>
+
+          <!-- Selected Region KB Selector (only for Object Detection) -->
+          @if (getCurrentStepType() === 'object_detection' && selectedRegion) {
+
+
+            
+            <div class="kb-section object-kb" style="margin-top: 20px;">
+               
+              <app-knowledge-base-selector
+                label="KNOWLEDGE for: {{ selectedRegion.label }}"
+                placeholder="Search & select knowledge..."
+                [(ngModel)]="selectedRegionKBIds"
+                [multiple]="true"
+                [showQuickAdd]="true"
+                (selectionChange)="onRegionKBChange($event)">
+              </app-knowledge-base-selector>
+            </div>
+          }
+        </div>
+      }
+
+      <!-- Classification Panel -->
+      @if (getCurrentStepType() === 'classification') {
+        <div class="panel-content">
+          <h3>Image Classification</h3>
+
+          <div class="classification-labels">
+            <h4>Labels</h4>
+            <div class="labels-chips">
+              @for (label of classification.labels; track label) {
+                <div class="label-chip" [class.primary]="classification.primary_label === label">
+                  <span (click)="setPrimaryLabel(label)">{{ label }}</span>
+                  <mat-icon (click)="removeClassLabel(label)">close</mat-icon>
+                </div>
+              }
+            </div>
+
+            <div class="add-label">
+              <mat-form-field appearance="outline" class="full-width">
+                <mat-label>Add Label</mat-label>
+                <input matInput [(ngModel)]="newClassLabel" (keyup.enter)="addClassLabel()" placeholder="Type and press Enter" />
+              </mat-form-field>
+            </div>
+
+            <!-- Quick Labels -->
+            <div class="quick-labels-section classification-quick-labels">
+              <span class="section-label">Quick Labels</span>
+              <div class="quick-labels-list">
+                @for (label of uniqueLabels; track label) {
+                  @if (!classification.labels.includes(label)) {
+                    <button mat-stroked-button (click)="addCommonLabel(label)">
+                      {{ label }}
+                    </button>
+                  }
+                }
+              </div>
+            </div>
+          </div>
+
+          <div class="classification-notes">
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Notes</mat-label>
+              <textarea matInput [(ngModel)]="classification.notes" rows="3" (blur)="saveClassification()"></textarea>
+            </mat-form-field>
+          </div>
+        </div>
+      }
+
+      <!-- Captioning Panel -->
+      @if (getCurrentStepType() === 'captioning') {
+        <div class="panel-content captioning-panel">
+          <mat-tab-group>
+            <mat-tab label="Image Caption">
+              <div class="caption-section">
+                <!-- Knowledge Base Selector - At Top -->
+                <div class="kb-selector-section">
+                  <app-knowledge-base-selector
+                    label="Related Knowledge"
+                    placeholder="Search knowledge base..."
+                    [(ngModel)]="imageCaptionKBIds"
+                    [multiple]="true"
+                    [showQuickAdd]="true"
+                    (selectionChange)="onImageKBSelectionChange($event)">
+                  </app-knowledge-base-selector>
+                </div>
+
+                <!-- ENGLISH SECTION -->
+                <div class="lang-section">
+                  <div class="lang-header">
+                    <span class="lang-flag">🇬🇧</span>
+                    <span class="lang-title">English</span>
+                  </div>
+                  <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Visual Caption</mat-label>
+                    <textarea matInput [(ngModel)]="imageCaptionData.visual_caption" rows="2"></textarea>
+                  </mat-form-field>
+                  <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Contextual Caption</mat-label>
+                    <textarea matInput [(ngModel)]="imageCaptionData.contextual_caption" rows="2"></textarea>
+                  </mat-form-field>
+                  <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Combined Caption</mat-label>
+                    <textarea matInput [(ngModel)]="imageCaptionData.combined_caption" rows="3"></textarea>
+                  </mat-form-field>
+                  <div class="translate-buttons">
+                    <button mat-stroked-button (click)="translateCaption('en', 'vi', true)" [disabled]="translating">
+                      <mat-icon>south</mat-icon> Translate to VI
+                    </button>
+                  </div>
+                </div>
+
+                <!-- VIETNAMESE SECTION -->
+                <div class="lang-section">
+                  <div class="lang-header">
+                    <span class="lang-flag">🇻🇳</span>
+                    <span class="lang-title">Vietnamese</span>
+                  </div>
+                  <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Visual Caption (VI)</mat-label>
+                    <textarea matInput [(ngModel)]="imageCaptionData.visual_caption_vi" rows="2"></textarea>
+                  </mat-form-field>
+                  <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Contextual Caption (VI)</mat-label>
+                    <textarea matInput [(ngModel)]="imageCaptionData.contextual_caption_vi" rows="2"></textarea>
+                  </mat-form-field>
+                  <mat-form-field appearance="outline" class="full-width">
+                    <mat-label>Combined Caption (VI)</mat-label>
+                    <textarea matInput [(ngModel)]="imageCaptionData.combined_caption_vi" rows="3"></textarea>
+                  </mat-form-field>
+                  <div class="translate-buttons">
+                    <button mat-stroked-button (click)="translateCaption('vi', 'en', true)" [disabled]="translating">
+                      <mat-icon>north</mat-icon> Translate to EN
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Auto Combine & Translate -->
+                <div class="combine-actions">
+                  <button mat-stroked-button class="auto-combine-btn" 
+                          (click)="autoCombineAndTranslateImage()"
+                          [disabled]="translating || !canCombineImageCaptions()"
+                          [matTooltip]="getCombineTooltip(true)">
+                    @if (translating) {
+                      <mat-spinner diameter="16"></mat-spinner>
+                    } @else {
+                      <mat-icon>auto_awesome</mat-icon>
+                    }
+                    {{ translating ? 'Processing...' : 'Auto Combine & Translate' }}
+                  </button>
+                </div>
+
+                <button mat-raised-button color="primary" (click)="saveImageCaption()" class="save-btn">
+                  <mat-icon>save</mat-icon> Save Caption
+                </button>
+              </div>
+            </mat-tab>
+
+            <mat-tab label="Region Captions">
+              <div class="caption-section">
+                <!-- Regions List -->
+                <div class="regions-section">
+                  <span class="section-label">Regions ({{ regions.length }})</span>
+                  <div class="regions-list compact">
+                    @for (region of regions; track region.id) {
+                      <div class="region-item" [class.selected]="selectedRegion?.id === region.id" (click)="selectRegion(region)">
+                        <div class="region-color" [style.background-color]="region.color"></div>
+                        <span class="region-label">{{ region.label }}</span>
+                        <button mat-icon-button class="delete-btn" (click)="deleteRegion(region); $event.stopPropagation()" matTooltip="Delete">
+                          <mat-icon>delete</mat-icon>
+                        </button>
+                      </div>
+                    }
+                  </div>
+                  <p class="tool-hint">Use tools on the left to draw regions</p>
+                </div>
+
+                @if (!selectedRegion) {
+                  <p class="empty-message">Draw or select a region to add captions</p>
+                } @else {
+                  <div class="selected-region-info">
+                    <div class="region-color" [style.background-color]="selectedRegion.color"></div>
+                    <span>{{ selectedRegion.label }}</span>
+                  </div>
+
+                  <!-- Knowledge Base Selector - At Top -->
+                  <div class="kb-selector-section">
+                    <app-knowledge-base-selector
+                      label="Related Knowledge"
+                      placeholder="Search knowledge base..."
+                      [(ngModel)]="captionKBIds"
+                      [multiple]="true"
+                      [showQuickAdd]="true"
+                      (selectionChange)="onRegionKBSelectionChange($event)">
+                    </app-knowledge-base-selector>
+                  </div>
+
+                  <!-- ENGLISH SECTION -->
+                  <div class="lang-section">
+                    <div class="lang-header">
+                      <span class="lang-flag">🇬🇧</span>
+                      <span class="lang-title">English</span>
+                    </div>
+                    <mat-form-field appearance="outline" class="full-width">
+                      <mat-label>Visual Caption</mat-label>
+                      <textarea matInput [(ngModel)]="regionCaptionData.visual_caption" rows="2"></textarea>
+                    </mat-form-field>
+                    <mat-form-field appearance="outline" class="full-width">
+                      <mat-label>Contextual Caption</mat-label>
+                      <textarea matInput [(ngModel)]="regionCaptionData.contextual_caption" rows="2"></textarea>
+                    </mat-form-field>
+                    <mat-form-field appearance="outline" class="full-width">
+                      <mat-label>Combined Caption</mat-label>
+                      <textarea matInput [(ngModel)]="regionCaptionData.combined_caption" rows="3"></textarea>
+                    </mat-form-field>
+                    <div class="translate-buttons">
+                      <button mat-stroked-button (click)="translateCaption('en', 'vi', false)" [disabled]="translating">
+                        <mat-icon>south</mat-icon> Translate to VI
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- VIETNAMESE SECTION -->
+                  <div class="lang-section">
+                    <div class="lang-header">
+                      <span class="lang-flag">🇻🇳</span>
+                      <span class="lang-title">Vietnamese</span>
+                    </div>
+                    <mat-form-field appearance="outline" class="full-width">
+                      <mat-label>Visual Caption (VI)</mat-label>
+                      <textarea matInput [(ngModel)]="regionCaptionData.visual_caption_vi" rows="2"></textarea>
+                    </mat-form-field>
+                    <mat-form-field appearance="outline" class="full-width">
+                      <mat-label>Contextual Caption (VI)</mat-label>
+                      <textarea matInput [(ngModel)]="regionCaptionData.contextual_caption_vi" rows="2"></textarea>
+                    </mat-form-field>
+                    <mat-form-field appearance="outline" class="full-width">
+                      <mat-label>Combined Caption (VI)</mat-label>
+                      <textarea matInput [(ngModel)]="regionCaptionData.combined_caption_vi" rows="3"></textarea>
+                    </mat-form-field>
+                    <div class="translate-buttons">
+                      <button mat-stroked-button (click)="translateCaption('vi', 'en', false)" [disabled]="translating">
+                        <mat-icon>north</mat-icon> Translate to EN
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Auto Combine & Translate -->
+                  <div class="combine-actions">
+                    <button mat-stroked-button class="auto-combine-btn" 
+                            (click)="autoCombineAndTranslateRegion()"
+                            [disabled]="translating || !canCombineRegionCaptions()"
+                            [matTooltip]="getCombineTooltip(false)">
+                      @if (translating) {
+                        <mat-spinner diameter="16"></mat-spinner>
+                      } @else {
+                        <mat-icon>auto_awesome</mat-icon>
+                      }
+                      {{ translating ? 'Processing...' : 'Auto Combine & Translate' }}
+                    </button>
+                  </div>
+
+                  <button mat-raised-button color="primary" (click)="saveRegionCaption()" class="save-btn">
+                    <mat-icon>save</mat-icon> Save Caption
+                  </button>
+                }
+              </div>
+            </mat-tab>
+          </mat-tab-group>
+        </div>
+      }
+
+      <!-- QA Panel -->
+      @if (getCurrentStepType() === 'qa') {
+        <div class="panel-content qa-panel">
+          <h3>Question & Answer Pairs</h3>
+
+          <div class="qa-form">
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Question (EN)</mat-label>
+              <input matInput [(ngModel)]="newQuestion" placeholder="What is shown in this image?" />
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Answer (EN)</mat-label>
+              <textarea matInput [(ngModel)]="newAnswer" rows="2"></textarea>
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Question (VI)</mat-label>
+              <input matInput [(ngModel)]="newQuestionVi" />
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Answer (VI)</mat-label>
+              <textarea matInput [(ngModel)]="newAnswerVi" rows="2"></textarea>
+            </mat-form-field>
+            <mat-form-field appearance="outline" class="full-width">
+              <mat-label>Type</mat-label>
+              <mat-select [(ngModel)]="newQaType">
+                @for (type of qaTypes; track type) {
+                  <mat-option [value]="type">{{ type }}</mat-option>
+                }
+              </mat-select>
+            </mat-form-field>
+
+            <div class="qa-buttons">
+              @if (editingQaId) {
+                <button mat-raised-button color="primary" (click)="updateQA()">
+                  <mat-icon>save</mat-icon> Update
+                </button>
+                <button mat-button (click)="clearQAForm()">Cancel</button>
+              } @else {
+                <button mat-raised-button color="primary" (click)="addQA()" [disabled]="!newQuestion.trim()">
+                  <mat-icon>add</mat-icon> Add QA
+                </button>
+              }
+            </div>
+          </div>
+
+          <div class="qa-list">
+            <h4>QA Pairs ({{ qaPairs.length }})</h4>
+            @for (qa of qaPairs; track qa.id) {
+              <mat-expansion-panel>
+                <mat-expansion-panel-header>
+                  <mat-panel-title>
+                    <span class="qa-type-badge">{{ qa.qa_type }}</span>
+                    {{ qa.question | slice:0:50 }}{{ qa.question.length > 50 ? '...' : '' }}
+                  </mat-panel-title>
+                </mat-expansion-panel-header>
+
+                <div class="qa-content">
+                  <p><strong>Q (EN):</strong> {{ qa.question }}</p>
+                  <p><strong>A (EN):</strong> {{ qa.answer }}</p>
+                  @if (qa.question_vi) {
+                    <p><strong>Q (VI):</strong> {{ qa.question_vi }}</p>
+                  }
+                  @if (qa.answer_vi) {
+                    <p><strong>A (VI):</strong> {{ qa.answer_vi }}</p>
+                  }
+                </div>
+
+                <mat-action-row>
+                  <button mat-button (click)="editQA(qa)">
+                    <mat-icon>edit</mat-icon> Edit
+                  </button>
+                  <button mat-button color="warn" (click)="deleteQA(qa)">
+                    <mat-icon>delete</mat-icon> Delete
+                  </button>
+                </mat-action-row>
+              </mat-expansion-panel>
+            }
+
+            @if (qaPairs.length === 0) {
+              <p class="empty-message">No QA pairs yet. Add questions and answers above.</p>
+            }
+          </div>
+        </div>
+      }
+
+      <!-- Navigation -->
+      <div class="panel-footer">
+        @if (!singleTaskMode) {
+          <button mat-button (click)="prevStep()" [disabled]="currentStep === 1">
+            <mat-icon>arrow_back</mat-icon> Previous
+          </button>
+          <div class="spacer"></div>
+          @if (currentStep < steps.length) {
+            <button mat-raised-button color="primary" (click)="nextStep()">
+              Next <mat-icon>arrow_forward</mat-icon>
+            </button>
+          } @else {
+            <button mat-raised-button color="accent" (click)="submitForReview()" [disabled]="image?.review_status === 'pending' || image?.review_status === 'approved'">
+              <mat-icon>send</mat-icon> Submit for Review
+            </button>
+          }
+        } @else {
+          <div class="spacer"></div>
+          <button mat-raised-button color="accent" (click)="submitForReview()" [disabled]="image?.review_status === 'pending' || image?.review_status === 'approved'">
+            <mat-icon>send</mat-icon> Submit for Review
+          </button>
+        }
+      </div>
+    </div>
+  </div>
+
+  <!-- Reject Dialog -->
+  @if (showRejectDialog) {
+    <div class="dialog-overlay" (click)="showRejectDialog = false">
+      <div class="reject-dialog" (click)="$event.stopPropagation()">
+        <h3>Reject Image</h3>
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Comment</mat-label>
+          <textarea matInput [(ngModel)]="rejectComment" rows="4" placeholder="Reason for rejection..."></textarea>
+        </mat-form-field>
+        <div class="dialog-actions">
+          <button mat-button (click)="showRejectDialog = false">Cancel</button>
+          <button mat-raised-button color="warn" (click)="rejectImage()">Reject</button>
+        </div>
+      </div>
+    </div>
+  }
+</div>

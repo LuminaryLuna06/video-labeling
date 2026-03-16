@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { Project, SubPart, Tag } from '../models';
 
 @Injectable({ providedIn: 'root' })
@@ -17,7 +18,12 @@ export class ProjectService {
     return this.http.get<Project>(`${this.API}/${id}`);
   }
 
-  createProject(data: { name: string; description: string }): Observable<Project> {
+  createProject(data: { 
+    name: string; 
+    description: string; 
+    project_type?: 'video' | 'image';
+    task_type?: 'object_detection' | 'classification' | 'captioning' | 'qa' | 'segmentation';
+  }): Observable<Project> {
     return this.http.post<Project>(this.API, data);
   }
 
@@ -41,6 +47,13 @@ export class ProjectService {
     return this.http.delete(`${this.API}/${projectId}/subparts/${subpartId}`);
   }
 
+  // Get project_id from subpart
+  getSubpartProject(subpartId: string): Observable<string | null> {
+    return this.http.get<{ project_id: string }>(`/api/images/subpart/${subpartId}/project`).pipe(
+      map(res => res.project_id)
+    );
+  }
+
   // ---- Tags ----
   getTags(projectId: string): Observable<Tag[]> {
     return this.http.get<Tag[]>(`/api/tags/project/${projectId}`);
@@ -56,5 +69,10 @@ export class ProjectService {
 
   deleteTag(tagId: string): Observable<any> {
     return this.http.delete(`/api/tags/${tagId}`);
+  }
+
+  // ---- Export ----
+  exportProject(projectId: string, format: 'json' | 'yolo' | 'coco' | 'csv'): Observable<any> {
+    return this.http.get<any>(`${this.API}/${projectId}/export/${format}`);
   }
 }

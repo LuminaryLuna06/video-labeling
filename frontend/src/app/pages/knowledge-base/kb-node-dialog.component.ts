@@ -103,7 +103,8 @@ export class KBNodeDialogComponent {
       },
       error: (error) => {
         console.error('Error saving node:', error);
-        this.snackBar.open('Error saving knowledge node', 'Close', { duration: 3000 });
+        const msg = error?.error?.error || 'Error saving knowledge node';
+        this.snackBar.open(msg, 'Close', { duration: 4000 });
       }
     });
   }
