@@ -18,3 +18,11 @@ class Config:
     VECTOR_DATA_DIR = os.environ.get('VECTOR_DATA_DIR', os.path.join(BASE_DIR, 'data'))
     FAISS_INDEX_PATH = os.environ.get('FAISS_INDEX_PATH', os.path.join(VECTOR_DATA_DIR, 'faiss.index'))
     FAISS_MAP_PATH = os.environ.get('FAISS_MAP_PATH', os.path.join(VECTOR_DATA_DIR, 'faiss_id_map.pkl'))
+    CORS_ORIGINS = [
+        origin.strip()
+        for origin in os.environ.get(
+            'CORS_ORIGINS',
+            'https://annotator.stecom.vn,http://localhost:4200,http://127.0.0.1:4200',
+        ).split(',')
+        if origin.strip()
+    ]

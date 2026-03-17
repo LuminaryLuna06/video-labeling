@@ -11,7 +11,43 @@ def create_app():
     app.config.from_object(Config)
     app.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH
 
-    CORS(app, resources={r"/api/*": {"origins": "*"}})
+    cors_origins = Config.CORS_ORIGINS or ['*']
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": cors_origins}},
+        supports_credentials=True,
+        methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        allow_headers=['Content-Type', 'Authorization', 'X-Requested-With'],
+        expose_headers=['Content-Type', 'Authorization'],
+        max_age=86400,
+    )
+
+    @app.route('/api/<path:_path>', methods=['OPTIONS'])
+    def api_preflight(_path):
+        # Explicitly handle preflight for reverse proxies that forward OPTIONS.
+        return ('', 204)
+
+    @app.after_request
+    def add_cors_headers(response):
+        origin = response.headers.get('Access-Control-Allow-Origin')
+        req_origin = ''
+        try:
+            from flask import request
+            req_origin = request.headers.get('Origin', '')
+        except Exception:
+            req_origin = ''
+
+        # Ensure CORS headers exist on all API responses, including errors.
+        if not origin and req_origin:
+            allowed = Config.CORS_ORIGINS or []
+            if '*' in allowed or req_origin in allowed:
+                response.headers['Access-Control-Allow-Origin'] = req_origin
+                response.headers['Vary'] = 'Origin'
+
+        response.headers.setdefault('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS')
+        response.headers.setdefault('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+        response.headers.setdefault('Access-Control-Max-Age', '86400')
+        return response
 
     # MongoDB connection
     client = MongoClient(Config.MONGO_URI)
