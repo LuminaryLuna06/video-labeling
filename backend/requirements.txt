@@ -16,6 +16,8 @@ python-dotenv==1.0.0
 pymongo==4.6.1
 Pillow==10.2.0
 Werkzeug==3.0.1
+faiss-cpu==1.8.0
+google-generativeai>=0.3.0
 
 # DINOv2 (loaded via torch.hub)
 # No explicit package needed - uses facebookresearch/dinov2 from torch hub
