@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, tap } from 'rxjs';
 
 export interface AppSettings {
   gemini_api_key: string;
@@ -51,12 +51,37 @@ export class SettingsService {
     this.settings.set(updated);
   }
 
+  private applyRemoteSettings(remote: Partial<AppSettings>): void {
+    const updated = {
+      ...this.settings(),
+      ...remote,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+    this.settings.set(updated);
+  }
+
   get(): AppSettings {
     return this.settings();
   }
 
   getDefaults(): AppSettings {
     return { ...DEFAULT_SETTINGS };
+  }
+
+  getAllSettings(): Observable<AppSettings> {
+    return this.http.get<AppSettings>(`${this.SETTINGS_API}`);
+  }
+
+  saveAllSettings(payload: AppSettings): Observable<AppSettings> {
+    return this.http.put<AppSettings>(`${this.SETTINGS_API}`, payload).pipe(
+      tap(remote => this.applyRemoteSettings(remote))
+    );
+  }
+
+  syncAllFromBackend(): Observable<AppSettings> {
+    return this.getAllSettings().pipe(
+      tap(remote => this.applyRemoteSettings(remote))
+    );
   }
 
   // ---- DAM Server URL (synced with backend DB) ----
@@ -72,6 +97,22 @@ export class SettingsService {
   testDamConnection(url: string): Observable<{ status: string; message: string; details?: any }> {
     return this.http.post<{ status: string; message: string; details?: any }>(
       `${this.SETTINGS_API}/dam-url/test`, { dam_server_url: url }
+    );
+  }
+
+  getGeminiSettings(): Observable<Pick<AppSettings, 'gemini_api_key' | 'gemini_model'>> {
+    return this.http.get<Pick<AppSettings, 'gemini_api_key' | 'gemini_model'>>(`${this.SETTINGS_API}/gemini`);
+  }
+
+  saveGeminiSettings(payload: Pick<AppSettings, 'gemini_api_key' | 'gemini_model'>): Observable<any> {
+    return this.http.put(`${this.SETTINGS_API}/gemini`, payload).pipe(
+      tap(() => this.applyRemoteSettings(payload))
+    );
+  }
+
+  syncGeminiFromBackend(): Observable<Pick<AppSettings, 'gemini_api_key' | 'gemini_model'>> {
+    return this.getGeminiSettings().pipe(
+      tap(remote => this.applyRemoteSettings(remote))
     );
   }
 }

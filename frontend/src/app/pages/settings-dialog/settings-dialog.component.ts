@@ -41,10 +41,15 @@ export class SettingsDialogComponent implements OnInit {
   }
 
   ngOnInit(): void {
-    // Load DAM URL from backend
-    this.settingsService.getDamUrl().subscribe({
-      next: (res) => { this.damServerUrl = res.dam_server_url; },
-      error: () => { this.damServerUrl = this.form.dam_server_url || ''; }
+    // Load all settings from backend so they persist across browsers.
+    this.settingsService.syncAllFromBackend().subscribe({
+      next: (remote) => {
+        this.form = { ...remote };
+        this.damServerUrl = remote.dam_server_url || '';
+      },
+      error: () => {
+        this.damServerUrl = this.form.dam_server_url || '';
+      }
     });
   }
 
@@ -79,24 +84,22 @@ export class SettingsDialogComponent implements OnInit {
   }
 
   save(): void {
-    // Save local settings (Gemini, prompts)
-    this.settingsService.save(this.form);
+    const payload: AppSettings = {
+      ...this.form,
+      gemini_api_key: (this.form.gemini_api_key || '').trim(),
+      gemini_model: (this.form.gemini_model || '').trim() || 'gemini-2.0-flash',
+      dam_server_url: this.damServerUrl.trim(),
+    };
 
-    // Save DAM URL to backend DB
-    const url = this.damServerUrl.trim();
-    if (url) {
-      this.settingsService.saveDamUrl(url).subscribe({
-        next: () => {
-          this.snackBar.open('Settings saved', '', { duration: 2000, panelClass: 'snack-success' });
-          this.dialogRef.close(true);
-        },
-        error: () => {
-          this.snackBar.open('Gemini settings saved, but failed to save DAM URL', '', { duration: 3000, panelClass: 'snack-error' });
-          this.dialogRef.close(true);
-        }
-      });
-    } else {
-      this.dialogRef.close(true);
-    }
+    this.settingsService.saveAllSettings(payload).subscribe({
+      next: () => {
+        this.snackBar.open('Settings saved', '', { duration: 2000, panelClass: 'snack-success' });
+        this.dialogRef.close(true);
+      },
+      error: () => {
+        this.snackBar.open('Failed to save one or more settings', '', { duration: 3000, panelClass: 'snack-error' });
+        this.dialogRef.close(true);
+      }
+    });
   }
 }

@@ -1,15 +1,29 @@
 import { Injectable } from '@angular/core';
 import { SettingsService } from './settings.service';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable({ providedIn: 'root' })
 export class GeminiService {
   // Keep a high default cap to avoid truncation; model-specific server caps still apply.
   private readonly MAX_OUTPUT_TOKENS = 8192;
+  private backendSettingsSynced = false;
+
+  private async ensureBackendSettingsSynced(): Promise<void> {
+    if (this.backendSettingsSynced) return;
+    try {
+      await firstValueFrom(this.settingsService.syncAllFromBackend());
+    } catch {
+      // Ignore sync failures and keep local settings fallback.
+    } finally {
+      this.backendSettingsSynced = true;
+    }
+  }
 
     /**
      * Combine captions using Gemini API and custom prompt
      */
     async combineCaptions(captions: string[], isVi: boolean = false): Promise<string> {
+      await this.ensureBackendSettingsSynced();
       const settings = this.settingsService.get();
       if (!settings.gemini_api_key) {
         throw new Error('Gemini API key not configured. Open Settings to add your key.');
@@ -49,6 +63,8 @@ export class GeminiService {
    */
   async translate(text: string, direction: 'en_to_vi' | 'vi_to_en'): Promise<string> {
     if (!text.trim()) return '';
+
+    await this.ensureBackendSettingsSynced();
 
     const settings = this.settingsService.get();
     if (!settings.gemini_api_key) {
@@ -112,6 +128,7 @@ export class GeminiService {
    * The knowledge context provides domain-specific information from the KB hierarchy.
    */
   async combineCaptionsWithKnowledge(captions: string[], kbContext: string, isVi: boolean = false): Promise<string> {
+    await this.ensureBackendSettingsSynced();
     const settings = this.settingsService.get();
     if (!settings.gemini_api_key) {
       throw new Error('Gemini API key not configured. Open Settings to add your key.');
