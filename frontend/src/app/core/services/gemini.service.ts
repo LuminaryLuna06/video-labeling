@@ -3,6 +3,9 @@ import { SettingsService } from './settings.service';
 
 @Injectable({ providedIn: 'root' })
 export class GeminiService {
+  // Keep a high default cap to avoid truncation; model-specific server caps still apply.
+  private readonly MAX_OUTPUT_TOKENS = 8192;
+
     /**
      * Combine captions using Gemini API and custom prompt
      */
@@ -21,7 +24,7 @@ export class GeminiService {
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
             temperature: 0.3,
-            maxOutputTokens: 2048,
+            maxOutputTokens: this.MAX_OUTPUT_TOKENS,
           }
         })
       });
@@ -67,7 +70,7 @@ export class GeminiService {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.3,
-          maxOutputTokens: 2048,
+          maxOutputTokens: this.MAX_OUTPUT_TOKENS,
         }
       })
     });
@@ -147,7 +150,7 @@ Instructions:
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: {
           temperature: 0.4,
-          maxOutputTokens: 2048,
+          maxOutputTokens: this.MAX_OUTPUT_TOKENS,
         }
       })
     });

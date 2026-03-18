@@ -20,6 +20,7 @@ from utils.vector_store import upsert_embedding, search_embeddings
 videos_bp = Blueprint('videos', __name__)
 
 ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm'}
+GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get('GEMINI_MAX_OUTPUT_TOKENS', '8192'))
 
 
 def allowed_file(filename):
@@ -313,7 +314,12 @@ Vietnamese:"""
         print("="*60)
         print(vi_prompt)
         print("="*60 + "\n")
-        vi_resp = model.generate_content(vi_prompt)
+        vi_resp = model.generate_content(
+            vi_prompt,
+            generation_config={
+                'max_output_tokens': GEMINI_MAX_OUTPUT_TOKENS,
+            }
+        )
         return (getattr(vi_resp, 'text', '') or '').strip()
     except Exception:
         return ''
@@ -525,7 +531,12 @@ Return ONLY valid JSON:
                 print("="*60)
                 print(gemini_prompt)
                 print("="*60 + "\n")
-                gemini_response = model.generate_content(gemini_prompt)
+                gemini_response = model.generate_content(
+                    gemini_prompt,
+                    generation_config={
+                        'max_output_tokens': GEMINI_MAX_OUTPUT_TOKENS,
+                    }
+                )
                 result['gemini_description'] = gemini_response.text
                 print("\n" + "="*60)
                 print("GEMINI RESPONSE:")
