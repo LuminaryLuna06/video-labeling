@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System dependencies for Pillow
+# System dependencies for Pillow/OpenCV runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libglib2.0-0 \
+    gcc libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
