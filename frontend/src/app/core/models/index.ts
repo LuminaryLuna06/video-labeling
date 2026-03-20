@@ -66,14 +66,18 @@ export interface ReviewEntry {
   reviewer_id: string;
   action: 'approve' | 'reject';
   comment?: string;
+  quality_scores?: { [key: string]: number };
   reviewed_at: string;
 }
 
 export interface ReviewWithDetails {
   reviewer: User;
+  reviewer_id?: string;
   action: 'approve' | 'reject';
   comment?: string;
+  quality_scores?: { [key: string]: number };
   reviewed_at: string;
+  reviewer_details?: User;
 }
 
 export interface VideoItem {
@@ -284,6 +288,8 @@ export interface UserStats {
   total_reviews: number;
   approved: number;
   rejected: number;
+  avg_quality_score?: number;
+  avg_quality_scores?: { [key: string]: number };
 }
 
 export interface ImageReviewItem {

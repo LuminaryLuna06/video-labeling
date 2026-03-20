@@ -18,6 +18,7 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
 import { VideoService } from '../../core/services/video.service';
+import { QualityScores } from '../../core/services/video.service';
 import { AuthService } from '../../core/services/auth.service';
 import { GeminiService } from '../../core/services/gemini.service';
 import { SettingsService } from '../../core/services/settings.service';
@@ -136,8 +137,25 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   private isResizingPanel = false;
 
   // Review
+  showEditorApproveDialog = false;
   showEditorRejectDialog = false;
   editorRejectComment = '';
+
+  // Quality Scoring
+  qualityScores: QualityScores = {
+    accuracy: 0,
+    completeness: 0,
+    knowledge_integration: 0,
+    fluency_coherence: 0,
+    knowledge_relevance: 0
+  };
+  scoringCriteria = [
+    { key: 'accuracy', label: 'Accuracy', labelVi: 'Chính xác', desc: 'Caption correctly describes visual content' },
+    { key: 'completeness', label: 'Completeness', labelVi: 'Đầy đủ', desc: 'Covers all important objects, actions, context' },
+    { key: 'knowledge_integration', label: 'Knowledge Integration', labelVi: 'Tích hợp tri thức', desc: 'KB knowledge appropriately incorporated' },
+    { key: 'fluency_coherence', label: 'Fluency & Coherence', labelVi: 'Trôi chảy & Mạch lạc', desc: 'Well-structured, natural in both EN/VI' },
+    { key: 'knowledge_relevance', label: 'Knowledge Relevance', labelVi: 'Tri thức phù hợp', desc: 'Selected KB entries are relevant' }
+  ];
   private resizeMouseMove: ((e: MouseEvent) => void) | null = null;
   private resizeMouseUp: (() => void) | null = null;
 
@@ -2080,22 +2098,37 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
-  approveVideo(): void {
+  openApproveDialog(): void {
     if (!this.video) return;
-    this.videoService.reviewVideo(this.video.id, 'approve').subscribe({
+    this.prefillScores();
+    this.showEditorApproveDialog = true;
+  }
+
+  confirmApproveVideo(): void {
+    if (!this.video) return;
+    const scores = this.hasAnyScore() ? { ...this.qualityScores } : undefined;
+    this.videoService.reviewVideo(this.video.id, 'approve', undefined, scores).subscribe({
       next: (res) => {
         this.video!.review_status = res.review_status;
         this.video!.reviews = res.reviews || [];
         this.video!.review_comment = '';
+        this.showEditorApproveDialog = false;
         this.snackBar.open('Your approval recorded!', '', { duration: 2000, panelClass: 'snack-success' });
         this.loadVideo(this.video!.id); // Reload to get updated details
       }
     });
   }
 
-  rejectVideo(): void {
+  openRejectDialog(): void {
     if (!this.video) return;
-    this.videoService.reviewVideo(this.video.id, 'reject', this.editorRejectComment).subscribe({
+    this.prefillScores();
+    this.showEditorRejectDialog = true;
+  }
+
+  confirmRejectVideo(): void {
+    if (!this.video) return;
+    const scores = this.hasAnyScore() ? { ...this.qualityScores } : undefined;
+    this.videoService.reviewVideo(this.video.id, 'reject', this.editorRejectComment, scores).subscribe({
       next: (res) => {
         this.video!.review_status = res.review_status;
         this.video!.reviews = res.reviews || [];
@@ -2127,5 +2160,67 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         this.snackBar.open('Your review withdrawn', '', { duration: 2000, panelClass: 'snack-success' });
       }
     });
+  }
+
+  // ---- Quality Scoring Helpers ----
+  setScore(criterion: string, value: number): void {
+    (this.qualityScores as any)[criterion] = value;
+  }
+
+  getScore(criterion: string): number {
+    return (this.qualityScores as any)[criterion] || 0;
+  }
+
+  hasAnyScore(): boolean {
+    return Object.values(this.qualityScores).some(v => v > 0);
+  }
+
+  getAverageScore(): number {
+    const scores = Object.values(this.qualityScores).filter(v => v > 0);
+    if (scores.length === 0) return 0;
+    return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
+  }
+
+  getReviewerScores(reviewerId: string): any {
+    const review = this.video?.reviews_with_details?.find((r: any) => r.reviewer_id === reviewerId);
+    return review?.quality_scores || null;
+  }
+
+  getReviewerAvgScore(reviewerId: string): number {
+    const scores = this.getReviewerScores(reviewerId);
+    if (!scores) return 0;
+    const vals = Object.values(scores).filter((v: any) => v > 0) as number[];
+    if (vals.length === 0) return 0;
+    return Math.round((vals.reduce((a: number, b: number) => a + b, 0) / vals.length) * 10) / 10;
+  }
+
+  prefillScores(): void {
+    if (this.hasUserReviewed()) {
+      const currentUserId = this.authService.user()?.id;
+      const existingReview = this.video?.reviews_with_details?.find((r: any) => r.reviewer_id === currentUserId);
+      if (existingReview?.quality_scores) {
+        const qs = existingReview.quality_scores;
+        this.qualityScores = {
+          accuracy: qs['accuracy'] || 0,
+          completeness: qs['completeness'] || 0,
+          knowledge_integration: qs['knowledge_integration'] || 0,
+          fluency_coherence: qs['fluency_coherence'] || 0,
+          knowledge_relevance: qs['knowledge_relevance'] || 0
+        };
+      }
+    } else {
+      // Reset scores if opening for a new review
+      this.qualityScores = {
+        accuracy: 0,
+        completeness: 0,
+        knowledge_integration: 0,
+        fluency_coherence: 0,
+        knowledge_relevance: 0
+      };
+    }
+  }
+
+  getStarArray(): number[] {
+    return [1, 2, 3, 4, 5];
   }
 }

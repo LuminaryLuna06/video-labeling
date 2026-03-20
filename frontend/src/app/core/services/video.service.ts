@@ -173,8 +173,8 @@ export class VideoService {
     return this.http.post(`${this.API}/${videoId}/submit-review`, {});
   }
 
-  reviewVideo(videoId: string, action: 'approve' | 'reject', comment?: string): Observable<any> {
-    return this.http.post(`${this.API}/${videoId}/review`, { action, comment });
+  reviewVideo(videoId: string, action: 'approve' | 'reject', comment?: string, qualityScores?: QualityScores): Observable<any> {
+    return this.http.post(`${this.API}/${videoId}/review`, { action, comment, quality_scores: qualityScores });
   }
 
   revokeApproval(videoId: string, reason?: string): Observable<any> {
@@ -296,4 +296,12 @@ export interface VideoSearchMatch {
   video: VideoItem;
   score: number;
   frame_matches: { frame_index: number; score: number }[];
+}
+
+export interface QualityScores {
+  accuracy: number;
+  completeness: number;
+  knowledge_integration: number;
+  fluency_coherence: number;
+  knowledge_relevance: number;
 }

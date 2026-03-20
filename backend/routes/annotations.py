@@ -659,6 +659,33 @@ def export_project_annotations(project_id):
     return jsonify(export_data)
 
 
+def _get_kb_items_for_caption(caption):
+    if not caption or not caption.get('knowledge_base_ids'):
+        return [], []
+    
+    kb_ids = _serialize_object_id_list(caption['knowledge_base_ids'])
+    kb_items = []
+    
+    try:
+        nodes = list(current_app.db.knowledge_base.find({'_id': {'$in': caption['knowledge_base_ids']}}))
+        for node in nodes:
+            kb_items.append({
+                'id': str(node['_id']),
+                'kb_id': node.get('kb_id', ''),
+                'name': node.get('name', ''),
+                'name_vi': node.get('name_vi', ''),
+                'type': node.get('type', 'concept'),
+                'description': node.get('description', ''),
+                'description_vi': node.get('description_vi', ''),
+                'visual_cues': node.get('visual_cues', ''),
+                'visual_cues_vi': node.get('visual_cues_vi', '')
+            })
+    except Exception as e:
+        print(f"Error fetching KB items: {e}")
+        
+    return kb_ids, kb_items
+
+
 def _build_video_export(video):
     """Build export data for a single video with all segments, regions, masks, captions."""
     video_id = video['_id']
@@ -674,6 +701,7 @@ def _build_video_export(video):
 
         for r in regions:
             caption = current_app.db.captions.find_one({'region_id': r['_id']})
+            kb_ids, kb_items = _get_kb_items_for_caption(caption)
 
             region_data = {
                 'id': str(r['_id']),
@@ -692,7 +720,9 @@ def _build_video_export(video):
                         'visual': caption.get('visual_caption_vi', '') if caption else '',
                         'knowledge': caption.get('knowledge_caption_vi', '') if caption else '',
                         'combined': caption.get('combined_caption_vi', '') if caption else ''
-                    }
+                    },
+                    'knowledge_base_ids': kb_ids,
+                    'knowledge_base_items': kb_items
                 }
             }
             regions_data.append(region_data)
@@ -702,18 +732,23 @@ def _build_video_export(video):
             'segment_id': seg['_id'],
             'region_id': None
         }))
-        seg_captions_data = [{
-            'en': {
-                'contextual': c.get('contextual_caption', ''),
-                'knowledge': c.get('knowledge_caption', ''),
-                'combined': c.get('combined_caption', '')
-            },
-            'vi': {
-                'contextual': c.get('contextual_caption_vi', ''),
-                'knowledge': c.get('knowledge_caption_vi', ''),
-                'combined': c.get('combined_caption_vi', '')
-            }
-        } for c in seg_captions]
+        seg_captions_data = []
+        for c in seg_captions:
+            kb_ids, kb_items = _get_kb_items_for_caption(c)
+            seg_captions_data.append({
+                'en': {
+                    'contextual': c.get('contextual_caption', ''),
+                    'knowledge': c.get('knowledge_caption', ''),
+                    'combined': c.get('combined_caption', '')
+                },
+                'vi': {
+                    'contextual': c.get('contextual_caption_vi', ''),
+                    'knowledge': c.get('knowledge_caption_vi', ''),
+                    'combined': c.get('combined_caption_vi', '')
+                },
+                'knowledge_base_ids': kb_ids,
+                'knowledge_base_items': kb_items
+            })
 
         seg_data = {
             'id': str(seg['_id']),

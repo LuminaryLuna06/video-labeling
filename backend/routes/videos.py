@@ -731,12 +731,15 @@ def _format_reviews(reviews):
     """Format review entries for API response."""
     formatted = []
     for r in reviews:
-        formatted.append({
+        entry = {
             'reviewer_id': str(r['reviewer_id']),
             'action': r['action'],
             'comment': r.get('comment', ''),
             'reviewed_at': r['reviewed_at'].isoformat() if r.get('reviewed_at') else None
-        })
+        }
+        if r.get('quality_scores'):
+            entry['quality_scores'] = r['quality_scores']
+        formatted.append(entry)
     return formatted
 
 
@@ -837,7 +840,7 @@ def get_video(video_id):
     reviews_with_details = []
     for r in video.get('reviews', []):
         rev_user = current_app.db.users.find_one({'_id': r['reviewer_id']}, {'password_hash': 0})
-        reviews_with_details.append({
+        review_detail = {
             'reviewer_id': str(r['reviewer_id']),
             'action': r['action'],
             'comment': r.get('comment', ''),
@@ -848,7 +851,10 @@ def get_video(video_id):
                 'full_name': rev_user.get('full_name', ''),
                 'avatar_color': rev_user.get('avatar_color', '#4A90D9')
             } if rev_user else None
-        })
+        }
+        if r.get('quality_scores'):
+            review_detail['quality_scores'] = r['quality_scores']
+        reviews_with_details.append(review_detail)
 
     return jsonify({
         'id': str(video['_id']),
@@ -1019,8 +1025,18 @@ def review_video(video_id):
         return jsonify({'error': 'Video not found'}), 404
 
     comment = data.get('comment', '')
+    quality_scores = data.get('quality_scores', None)
     reviewer_id = request.current_user['_id']
     now = datetime.now(timezone.utc)
+
+    # Validate quality_scores if provided
+    valid_criteria = ['accuracy', 'completeness', 'knowledge_integration', 'fluency_coherence', 'knowledge_relevance']
+    if quality_scores:
+        validated_scores = {}
+        for key in valid_criteria:
+            val = quality_scores.get(key, 0)
+            validated_scores[key] = max(0, min(5, int(val))) if val else 0
+        quality_scores = validated_scores
 
     # Get existing reviews
     reviews = video.get('reviews', [])
@@ -1029,12 +1045,15 @@ def review_video(video_id):
     reviews = [r for r in reviews if r['reviewer_id'] != reviewer_id]
     
     # Add new review
-    reviews.append({
+    review_entry = {
         'reviewer_id': reviewer_id,
         'action': action,
         'comment': comment,
         'reviewed_at': now
-    })
+    }
+    if quality_scores:
+        review_entry['quality_scores'] = quality_scores
+    reviews.append(review_entry)
 
     # Get required reviewers from subpart
     required_reviewers = []
@@ -1245,6 +1264,7 @@ def get_qc_stats():
             reviewer_color = reviewer.get('avatar_color', '#4A90D9')
             # Note: individual review uses 'action' field (approve/reject), not 'status'
             review_action = review.get('action', 'pending')
+            quality_scores = review.get('quality_scores', {})
             
             # Count by user
             if reviewer_id not in stats['by_user']:
@@ -1254,13 +1274,23 @@ def get_qc_stats():
                     'color': reviewer_color,
                     'total_reviews': 0,
                     'approved': 0,
-                    'rejected': 0
+                    'rejected': 0,
+                    'quality_scores_sum': {},
+                    'quality_scores_count': 0
                 }
             stats['by_user'][reviewer_id]['total_reviews'] += 1
             if review_action == 'approve':
                 stats['by_user'][reviewer_id]['approved'] += 1
             elif review_action == 'reject':
                 stats['by_user'][reviewer_id]['rejected'] += 1
+            
+            # Accumulate quality scores for averaging
+            if quality_scores:
+                stats['by_user'][reviewer_id]['quality_scores_count'] += 1
+                for criterion, score in quality_scores.items():
+                    if criterion not in stats['by_user'][reviewer_id]['quality_scores_sum']:
+                        stats['by_user'][reviewer_id]['quality_scores_sum'][criterion] = 0
+                    stats['by_user'][reviewer_id]['quality_scores_sum'][criterion] += score
             
             stats['recent_reviews'].append({
                 'video_id': str(video['_id']),
@@ -1317,7 +1347,20 @@ def get_qc_stats():
         reverse=False
     )[:50]  # Limit to 50
     
-    # Convert by_user dict to sorted list
+    # Convert by_user dict to sorted list, compute avg quality scores
+    for user_stats in stats['by_user'].values():
+        qs_sum = user_stats.pop('quality_scores_sum', {})
+        qs_count = user_stats.pop('quality_scores_count', 0)
+        if qs_count > 0:
+            user_stats['avg_quality_scores'] = {
+                k: round(v / qs_count, 2) for k, v in qs_sum.items()
+            }
+            all_scores = list(user_stats['avg_quality_scores'].values())
+            user_stats['avg_quality_score'] = round(sum(all_scores) / len(all_scores), 2) if all_scores else 0
+        else:
+            user_stats['avg_quality_scores'] = {}
+            user_stats['avg_quality_score'] = 0
+    
     stats['by_user'] = sorted(
         list(stats['by_user'].values()),
         key=lambda x: x.get('total_reviews', 0),

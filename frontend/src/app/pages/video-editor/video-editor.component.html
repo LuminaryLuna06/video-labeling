@@ -100,11 +100,11 @@
       <span *ngIf="hasUserReviewed()" class="ed-your-vote">
         Your vote: <strong>{{ getUserReview()?.action === 'approve' ? 'Approved' : 'Rejected' }}</strong>
       </span>
-      <button mat-stroked-button class="ed-approve-btn" (click)="approveVideo()"
+      <button mat-stroked-button class="ed-approve-btn" (click)="openApproveDialog()"
               [class.active]="getUserReview()?.action === 'approve'">
         <mat-icon>check_circle</mat-icon> {{ hasUserReviewed() ? 'Change to Approve' : 'Approve' }}
       </button>
-      <button mat-stroked-button class="ed-reject-btn" (click)="showEditorRejectDialog = true"
+      <button mat-stroked-button class="ed-reject-btn" (click)="openRejectDialog()"
               [class.active]="getUserReview()?.action === 'reject'">
         <mat-icon>cancel</mat-icon> {{ hasUserReviewed() ? 'Change to Reject' : 'Reject' }}
       </button>
@@ -118,6 +118,7 @@
     </button>
   </div>
 </div>
+
 <!-- Review Comment Banner -->
 <div class="review-comment-banner" *ngIf="video?.review_comment"
      [class.rejected]="video.review_status === 'rejected'">
@@ -821,19 +822,97 @@
   <mat-spinner diameter="40"></mat-spinner>
 </div>
 
+<!-- Approve Dialog -->
+<div class="ed-dialog-overlay" *ngIf="showEditorApproveDialog" (click)="showEditorApproveDialog = false">
+  <div class="ed-dialog-card" (click)="$event.stopPropagation()">
+    <div class="ed-dialog-header">
+      <h2>Approve Video</h2>
+      <button mat-icon-button (click)="showEditorApproveDialog = false"><mat-icon>close</mat-icon></button>
+    </div>
+    <p class="ed-dialog-subtitle">{{ video?.original_name }}</p>
+    
+    <div class="scoring-card your-scoring dialog-scoring" *ngIf="canReview()">
+      <div class="scoring-card-header">
+        <mat-icon>rate_review</mat-icon>
+        <span>Your Quality Score</span>
+        <span class="your-avg-badge" *ngIf="hasAnyScore()">
+          Avg: <strong>{{ getAverageScore() }}</strong>/5
+        </span>
+      </div>
+      <div class="scoring-criteria-list">
+        <div class="scoring-criterion" *ngFor="let c of scoringCriteria">
+          <div class="criterion-info">
+            <span class="criterion-label">{{ c.label }}</span>
+            <span class="criterion-label-vi">{{ c.labelVi }}</span>
+          </div>
+          <div class="star-rating">
+            <button *ngFor="let star of getStarArray()" class="star-btn"
+                    [class.active]="star <= getScore(c.key)"
+                    (click)="setScore(c.key, star)"
+                    [matTooltip]="star + '/5'">
+              <mat-icon>{{ star <= getScore(c.key) ? 'star' : 'star_border' }}</mat-icon>
+            </button>
+          </div>
+          <span class="criterion-score" *ngIf="getScore(c.key) > 0">{{ getScore(c.key) }}/5</span>
+          <span class="criterion-score empty" *ngIf="getScore(c.key) === 0">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ed-dialog-actions">
+      <button mat-button (click)="showEditorApproveDialog = false">Cancel</button>
+      <button mat-raised-button class="ed-approve-btn" (click)="confirmApproveVideo()">
+        <mat-icon>check_circle</mat-icon> Confirm Approve
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- Reject Dialog -->
 <div class="ed-dialog-overlay" *ngIf="showEditorRejectDialog" (click)="showEditorRejectDialog = false">
   <div class="ed-dialog-card" (click)="$event.stopPropagation()">
-    <h2>Reject Video</h2>
+    <div class="ed-dialog-header">
+      <h2>Reject Video</h2>
+      <button mat-icon-button (click)="showEditorRejectDialog = false"><mat-icon>close</mat-icon></button>
+    </div>
     <p class="ed-dialog-subtitle">{{ video?.original_name }}</p>
+    
+    <div class="scoring-card your-scoring dialog-scoring" *ngIf="canReview()">
+      <div class="scoring-card-header">
+        <mat-icon>rate_review</mat-icon>
+        <span>Your Quality Score</span>
+        <span class="your-avg-badge" *ngIf="hasAnyScore()">
+          Avg: <strong>{{ getAverageScore() }}</strong>/5
+        </span>
+      </div>
+      <div class="scoring-criteria-list">
+        <div class="scoring-criterion" *ngFor="let c of scoringCriteria">
+          <div class="criterion-info">
+            <span class="criterion-label">{{ c.label }}</span>
+            <span class="criterion-label-vi">{{ c.labelVi }}</span>
+          </div>
+          <div class="star-rating">
+            <button *ngFor="let star of getStarArray()" class="star-btn"
+                    [class.active]="star <= getScore(c.key)"
+                    (click)="setScore(c.key, star)"
+                    [matTooltip]="star + '/5'">
+              <mat-icon>{{ star <= getScore(c.key) ? 'star' : 'star_border' }}</mat-icon>
+            </button>
+          </div>
+          <span class="criterion-score" *ngIf="getScore(c.key) > 0">{{ getScore(c.key) }}/5</span>
+          <span class="criterion-score empty" *ngIf="getScore(c.key) === 0">—</span>
+        </div>
+      </div>
+    </div>
+
     <div class="ed-textarea-wrap">
       <textarea [(ngModel)]="editorRejectComment" rows="4"
                 placeholder="Describe what needs to be fixed..."></textarea>
     </div>
     <div class="ed-dialog-actions">
       <button mat-button (click)="showEditorRejectDialog = false">Cancel</button>
-      <button mat-raised-button class="ed-reject-btn" (click)="rejectVideo()">
-        <mat-icon>cancel</mat-icon> Reject
+      <button mat-raised-button class="ed-reject-btn" (click)="confirmRejectVideo()">
+        <mat-icon>cancel</mat-icon> Confirm Reject
       </button>
     </div>
   </div>
