@@ -12,6 +12,30 @@ import traceback
 annotations_bp = Blueprint('annotations', __name__)
 
 
+def _serialize_object_id_list(values):
+    if not values:
+        return []
+    result = []
+    for value in values:
+        try:
+            result.append(str(value))
+        except Exception:
+            continue
+    return result
+
+
+def _parse_object_id_list(values):
+    if not isinstance(values, list):
+        return []
+    parsed = []
+    for value in values:
+        try:
+            parsed.append(ObjectId(str(value)))
+        except Exception:
+            continue
+    return parsed
+
+
 def _reset_video_approval_if_needed(video_id):
     """Reset video review status if it was approved (content changed)."""
     video = current_app.db.videos.find_one({'_id': video_id})
@@ -59,6 +83,7 @@ def get_segment_captions(segment_id):
             'contextual_caption_vi': c.get('contextual_caption_vi', ''),
             'knowledge_caption_vi': c.get('knowledge_caption_vi', ''),
             'combined_caption_vi': c.get('combined_caption_vi', ''),
+            'knowledge_base_ids': _serialize_object_id_list(c.get('knowledge_base_ids', [])),
             'created_by': str(c['created_by']),
             'created_at': c['created_at'].isoformat(),
             'updated_at': c.get('updated_at', c['created_at']).isoformat()
@@ -93,6 +118,7 @@ def get_segment_caption(segment_id):
         'contextual_caption_vi': caption.get('contextual_caption_vi', ''),
         'knowledge_caption_vi': caption.get('knowledge_caption_vi', ''),
         'combined_caption_vi': caption.get('combined_caption_vi', ''),
+        'knowledge_base_ids': _serialize_object_id_list(caption.get('knowledge_base_ids', [])),
         'created_at': caption['created_at'].isoformat(),
         'updated_at': caption.get('updated_at', caption['created_at']).isoformat()
     })
@@ -123,6 +149,7 @@ def get_region_caption(region_id):
         'contextual_caption_vi': caption.get('contextual_caption_vi', ''),
         'knowledge_caption_vi': caption.get('knowledge_caption_vi', ''),
         'combined_caption_vi': caption.get('combined_caption_vi', ''),
+        'knowledge_base_ids': _serialize_object_id_list(caption.get('knowledge_base_ids', [])),
         'created_at': caption['created_at'].isoformat(),
         'updated_at': caption.get('updated_at', caption['created_at']).isoformat()
     })
@@ -162,6 +189,7 @@ def create_caption():
                 'contextual_caption_vi': data.get('contextual_caption_vi', existing.get('contextual_caption_vi', '')),
                 'knowledge_caption_vi': data.get('knowledge_caption_vi', existing.get('knowledge_caption_vi', '')),
                 'combined_caption_vi': data.get('combined_caption_vi', existing.get('combined_caption_vi', '')),
+                'knowledge_base_ids': _parse_object_id_list(data.get('knowledge_base_ids', existing.get('knowledge_base_ids', []))),
                 'updated_at': datetime.now(timezone.utc)
             }}
         )
@@ -183,6 +211,7 @@ def create_caption():
             'contextual_caption_vi': updated.get('contextual_caption_vi', ''),
             'knowledge_caption_vi': updated.get('knowledge_caption_vi', ''),
             'combined_caption_vi': updated.get('combined_caption_vi', ''),
+            'knowledge_base_ids': _serialize_object_id_list(updated.get('knowledge_base_ids', [])),
             'created_at': updated['created_at'].isoformat(),
             'updated_at': updated.get('updated_at', updated['created_at']).isoformat()
         })
@@ -199,6 +228,7 @@ def create_caption():
         'contextual_caption_vi': data.get('contextual_caption_vi', ''),
         'knowledge_caption_vi': data.get('knowledge_caption_vi', ''),
         'combined_caption_vi': data.get('combined_caption_vi', ''),
+        'knowledge_base_ids': _parse_object_id_list(data.get('knowledge_base_ids', [])),
         'created_by': request.current_user['_id'],
         'created_at': datetime.now(timezone.utc),
         'updated_at': datetime.now(timezone.utc)
@@ -222,6 +252,7 @@ def create_caption():
         'contextual_caption_vi': caption['contextual_caption_vi'],
         'knowledge_caption_vi': caption['knowledge_caption_vi'],
         'combined_caption_vi': caption['combined_caption_vi'],
+        'knowledge_base_ids': _serialize_object_id_list(caption.get('knowledge_base_ids', [])),
         'created_at': caption['created_at'].isoformat()
     }), 201
 
@@ -256,6 +287,8 @@ def update_caption(caption_id):
         update_fields['knowledge_caption_vi'] = data['knowledge_caption_vi']
     if 'combined_caption_vi' in data:
         update_fields['combined_caption_vi'] = data['combined_caption_vi']
+    if 'knowledge_base_ids' in data:
+        update_fields['knowledge_base_ids'] = _parse_object_id_list(data.get('knowledge_base_ids', []))
     update_fields['updated_at'] = datetime.now(timezone.utc)
 
     current_app.db.captions.update_one(
@@ -280,6 +313,7 @@ def update_caption(caption_id):
         'contextual_caption_vi': updated.get('contextual_caption_vi', ''),
         'knowledge_caption_vi': updated.get('knowledge_caption_vi', ''),
         'combined_caption_vi': updated.get('combined_caption_vi', ''),
+        'knowledge_base_ids': _serialize_object_id_list(updated.get('knowledge_base_ids', [])),
         'created_at': updated['created_at'].isoformat(),
         'updated_at': updated['updated_at'].isoformat()
     })

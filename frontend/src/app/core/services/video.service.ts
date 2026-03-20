@@ -118,12 +118,26 @@ export class VideoService {
     return this.http.get<Caption>(`${this.ANNOTATIONS_API}/segment-caption/${segmentId}`);
   }
 
+  private ensureKbIds(payload: Partial<Caption>): Partial<Caption> {
+    const kbIds = (payload as any)?.knowledge_base_ids;
+    if (Array.isArray(kbIds)) {
+      return {
+        ...payload,
+        knowledge_base_ids: kbIds.filter((id: any) => typeof id === 'string' && !!id)
+      };
+    }
+    return {
+      ...payload,
+      knowledge_base_ids: []
+    };
+  }
+
   saveCaption(data: Partial<Caption> & { segment_id: string; video_id: string }): Observable<Caption> {
-    return this.http.post<Caption>(this.ANNOTATIONS_API, data);
+    return this.http.post<Caption>(this.ANNOTATIONS_API, this.ensureKbIds(data));
   }
 
   updateCaption(captionId: string, data: Partial<Caption>): Observable<Caption> {
-    return this.http.put<Caption>(`${this.ANNOTATIONS_API}/${captionId}`, data);
+    return this.http.put<Caption>(`${this.ANNOTATIONS_API}/${captionId}`, this.ensureKbIds(data));
   }
 
   deleteCaption(captionId: string): Observable<any> {

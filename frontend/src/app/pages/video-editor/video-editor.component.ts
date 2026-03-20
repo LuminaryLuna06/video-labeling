@@ -1160,6 +1160,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       next: (caption) => {
         if (caption) {
           this.segmentCaptionData = caption;
+          this.segmentCaptionKBIds = this.normalizeKbIds(caption.knowledge_base_ids || []);
         } else {
           this.segmentCaptionData = {
             visual_caption: '',
@@ -1171,6 +1172,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
             knowledge_caption_vi: '',
             combined_caption_vi: ''
           };
+          this.segmentCaptionKBIds = [];
         }
       }
     });
@@ -1254,12 +1256,14 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   loadRegionCaption(region: ObjectRegion): void {
     if (region.caption) {
       this.captionData = { ...region.caption };
+      this.captionKBIds = this.normalizeKbIds(region.caption.knowledge_base_ids || []);
     } else {
       this.videoService.getRegionCaption(region.id).subscribe({
         next: (caption) => {
           if (caption) {
             this.captionData = caption;
             region.caption = caption;
+            this.captionKBIds = this.normalizeKbIds(caption.knowledge_base_ids || []);
           } else {
             this.captionData = {
               visual_caption: '',
@@ -1271,6 +1275,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
               knowledge_caption_vi: '',
               combined_caption_vi: ''
             };
+            this.captionKBIds = [];
           }
         }
       });
