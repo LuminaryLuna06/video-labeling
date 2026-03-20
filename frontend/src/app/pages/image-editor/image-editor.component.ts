@@ -1031,9 +1031,12 @@ export class ImageEditorComponent implements OnInit, OnDestroy {
   saveImageCaption(): void {
     if (!this.image) return;
 
+    const kbIds = this.normalizeKbIds(this.imageCaptionKBIds);
+    this.imageCaptionKBIds = kbIds;
+
     this.imageService.saveImageCaption(this.image.id, {
       ...this.imageCaptionData,
-      knowledge_base_ids: this.imageCaptionKBIds
+      knowledge_base_ids: kbIds
     }).subscribe({
       next: () => {
         this.snackBar.open('Image caption saved', 'Close', { duration: 2000 });
@@ -1044,9 +1047,12 @@ export class ImageEditorComponent implements OnInit, OnDestroy {
   saveRegionCaption(): void {
     if (!this.selectedRegion) return;
 
+    const kbIds = this.normalizeKbIds(this.captionKBIds);
+    this.captionKBIds = kbIds;
+
     this.imageService.saveRegionCaption(this.selectedRegion.id, {
       ...this.regionCaptionData,
-      knowledge_base_ids: this.captionKBIds
+      knowledge_base_ids: kbIds
     }).subscribe({
       next: () => {
         this.snackBar.open('Region caption saved', 'Close', { duration: 2000 });
@@ -1207,13 +1213,28 @@ export class ImageEditorComponent implements OnInit, OnDestroy {
   /** KB selection change for image caption */
   onImageKBSelectionChange(nodes: any[]): void {
     // selectionChange emits KBNode[], extract IDs
-    this.imageCaptionKBIds = nodes.map(n => n.id);
+    this.imageCaptionKBIds = this.normalizeKbIds(nodes);
   }
 
   /** KB selection change for region caption */
   onRegionKBSelectionChange(nodes: any[]): void {
     // selectionChange emits KBNode[], extract IDs
-    this.captionKBIds = nodes.map(n => n.id);
+    this.captionKBIds = this.normalizeKbIds(nodes);
+  }
+
+  private normalizeKbIds(values: any[] | null | undefined): string[] {
+    if (!Array.isArray(values)) return [];
+
+    const ids = values
+      .map((value: any) => {
+        if (!value) return '';
+        if (typeof value === 'string') return value;
+        if (typeof value.id === 'string') return value.id;
+        return '';
+      })
+      .filter((id: string) => !!id);
+
+    return Array.from(new Set(ids));
   }
 
   /** KB selection change for image (Object Detection mode) */
