@@ -125,6 +125,8 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   // Knowledge Base IDs for captions
   captionKBIds: string[] = [];
   segmentCaptionKBIds: string[] = [];
+  // Cache region caption state to avoid reloading knowledge on reselection
+  private regionCaptionCache: { [regionId: string]: { data: Caption; kbIds: string[] } } = {};
   generatingVisual = false;
   generatingContextual = false;
   generatingAll = false;
@@ -1142,15 +1144,31 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   selectSegmentForCaption(seg: VideoSegment): void {
+    // Cache current region state before switching segments
+    if (this.selectedRegion) {
+      this.cacheRegionCaptionState(this.selectedRegion.id);
+    }
     this.selectedSegment = seg;
     this.selectedRegion = null;
     this.loadRegions();
     this.loadSegmentCaption(seg);
     this.loadSegmentPreview(seg);
-  }
+  } 
 
   selectRegionForCaption(region: ObjectRegion): void {
+    // Cache previous region before switching
+    if (this.selectedRegion) {
+      this.cacheRegionCaptionState(this.selectedRegion.id);
+    }
+
     this.selectedRegion = region;
+
+    // If we already loaded this region, restore from cache without reloading
+    if (this.applyCachedRegionCaption(region.id)) {
+      this.loadCaptionPreview(region);
+      return;
+    }
+
     this.loadRegionCaption(region);
     this.loadCaptionPreview(region);
   }
@@ -1257,6 +1275,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     if (region.caption) {
       this.captionData = { ...region.caption };
       this.captionKBIds = this.normalizeKbIds(region.caption.knowledge_base_ids || []);
+      this.cacheRegionCaptionState(region.id);
     } else {
       this.videoService.getRegionCaption(region.id).subscribe({
         next: (caption) => {
@@ -1264,6 +1283,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
             this.captionData = caption;
             region.caption = caption;
             this.captionKBIds = this.normalizeKbIds(caption.knowledge_base_ids || []);
+            this.cacheRegionCaptionState(region.id);
           } else {
             this.captionData = {
               visual_caption: '',
@@ -1276,6 +1296,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
               combined_caption_vi: ''
             };
             this.captionKBIds = [];
+            this.cacheRegionCaptionState(region.id);
           }
         }
       });
@@ -1811,6 +1832,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         next: (caption) => {
           this.captionData = caption;
           if (this.selectedRegion) this.selectedRegion.caption = caption;
+          if (this.selectedRegion) this.cacheRegionCaptionState(this.selectedRegion.id);
           this.snackBar.open('Caption updated!', '', { duration: 1500, panelClass: 'snack-success' });
         }
       });
@@ -1819,6 +1841,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         next: (caption) => {
           this.captionData = caption;
           if (this.selectedRegion) this.selectedRegion.caption = caption;
+          if (this.selectedRegion) this.cacheRegionCaptionState(this.selectedRegion.id);
           this.snackBar.open('Caption saved!', '', { duration: 1500, panelClass: 'snack-success' });
         }
       });
@@ -1885,6 +1908,28 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
 
   onRegionKBSelectionChange(nodes: any[]): void {
     this.captionKBIds = this.normalizeKbIds(nodes);
+  }
+
+  private cacheRegionCaptionState(regionId: string): void {
+    this.regionCaptionCache[regionId] = {
+      data: { ...this.captionData },
+      kbIds: [...this.captionKBIds]
+    };
+    if (this.selectedRegion && this.selectedRegion.id === regionId) {
+      // Keep the region's inline caption in sync
+      this.selectedRegion.caption = {
+        ...this.captionData,
+        knowledge_base_ids: [...this.captionKBIds]
+      } as any;
+    }
+  }
+
+  private applyCachedRegionCaption(regionId: string): boolean {
+    const cached = this.regionCaptionCache[regionId];
+    if (!cached) return false;
+    this.captionData = { ...cached.data };
+    this.captionKBIds = [...cached.kbIds];
+    return true;
   }
 
   private normalizeKbIds(values: any[] | null | undefined): string[] {

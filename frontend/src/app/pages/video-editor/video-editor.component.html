@@ -571,11 +571,11 @@
         </ng-container>
 
         <!-- ===== REGION-LEVEL CAPTION (when region is selected) ===== -->
-        <ng-container *ngIf="selectedRegion">
+        <div [style.display]="selectedRegion ? '' : 'none'">
           <div class="caption-header">
             <div class="caption-header-row">
               <h3>
-                Captioning: <span [style.color]="selectedRegion.color">{{ selectedRegion.label }}</span>
+                Captioning: <span [style.color]="selectedRegion?.color">{{ selectedRegion?.label }}</span>
                 in {{ selectedSegment?.name }}
               </h3>
               <!-- Professional Category Selector -->
@@ -770,7 +770,7 @@
               </button>
             </div>
           </div>
-        </ng-container>
+        </div>
 
         <!-- No selection placeholder -->
         <div *ngIf="!selectedSegment" class="caption-header">

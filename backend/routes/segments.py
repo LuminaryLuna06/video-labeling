@@ -303,7 +303,8 @@ def get_segment_regions(segment_id):
                 'visual_caption_vi': caption.get('visual_caption_vi', ''),
                 'contextual_caption_vi': caption.get('contextual_caption_vi', ''),
                 'knowledge_caption_vi': caption.get('knowledge_caption_vi', ''),
-                'combined_caption_vi': caption.get('combined_caption_vi', '')
+                'combined_caption_vi': caption.get('combined_caption_vi', ''),
+                'knowledge_base_ids': _serialize_object_id_list(caption.get('knowledge_base_ids', []))
             } if caption else None,
             'created_at': r['created_at'].isoformat()
         })
