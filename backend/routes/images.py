@@ -23,6 +23,19 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
+def _serialize_object_id_list(values):
+    """Convert ObjectId list (or mixed values) to string list for JSON responses."""
+    if not values:
+        return []
+    result = []
+    for value in values:
+        try:
+            result.append(str(value))
+        except Exception:
+            continue
+    return result
+
+
 def _build_image_stats(db, image):
     """Build image dict with annotation statistics."""
     img_id = image['_id']
@@ -348,7 +361,8 @@ def get_image(image_id):
                 'visual_caption_vi': caption.get('visual_caption_vi', ''),
                 'contextual_caption_vi': caption.get('contextual_caption_vi', ''),
                 'knowledge_caption_vi': caption.get('knowledge_caption_vi', ''),
-                'combined_caption_vi': caption.get('combined_caption_vi', '')
+                'combined_caption_vi': caption.get('combined_caption_vi', ''),
+                'knowledge_base_ids': _serialize_object_id_list(caption.get('knowledge_base_ids', []))
             }
         result['regions'].append(region_data)
 
@@ -367,7 +381,8 @@ def get_image(image_id):
             'visual_caption_vi': img_caption.get('visual_caption_vi', ''),
             'contextual_caption_vi': img_caption.get('contextual_caption_vi', ''),
             'knowledge_caption_vi': img_caption.get('knowledge_caption_vi', ''),
-            'combined_caption_vi': img_caption.get('combined_caption_vi', '')
+            'combined_caption_vi': img_caption.get('combined_caption_vi', ''),
+            'knowledge_base_ids': _serialize_object_id_list(img_caption.get('knowledge_base_ids', []))
         }
 
     # Get QA pairs
@@ -640,7 +655,8 @@ def get_image_caption(image_id):
             'visual_caption_vi': '',
             'contextual_caption_vi': '',
             'knowledge_caption_vi': '',
-            'combined_caption_vi': ''
+            'combined_caption_vi': '',
+            'knowledge_base_ids': []
         })
 
     return jsonify({
@@ -652,7 +668,8 @@ def get_image_caption(image_id):
         'visual_caption_vi': caption.get('visual_caption_vi', ''),
         'contextual_caption_vi': caption.get('contextual_caption_vi', ''),
         'knowledge_caption_vi': caption.get('knowledge_caption_vi', ''),
-        'combined_caption_vi': caption.get('combined_caption_vi', '')
+        'combined_caption_vi': caption.get('combined_caption_vi', ''),
+        'knowledge_base_ids': _serialize_object_id_list(caption.get('knowledge_base_ids', []))
     })
 
 
@@ -729,7 +746,8 @@ def get_region_caption(region_id):
             'visual_caption_vi': '',
             'contextual_caption_vi': '',
             'knowledge_caption_vi': '',
-            'combined_caption_vi': ''
+            'combined_caption_vi': '',
+            'knowledge_base_ids': []
         })
 
     return jsonify({
@@ -741,7 +759,8 @@ def get_region_caption(region_id):
         'visual_caption_vi': caption.get('visual_caption_vi', ''),
         'contextual_caption_vi': caption.get('contextual_caption_vi', ''),
         'knowledge_caption_vi': caption.get('knowledge_caption_vi', ''),
-        'combined_caption_vi': caption.get('combined_caption_vi', '')
+        'combined_caption_vi': caption.get('combined_caption_vi', ''),
+        'knowledge_base_ids': _serialize_object_id_list(caption.get('knowledge_base_ids', []))
     })
 
 

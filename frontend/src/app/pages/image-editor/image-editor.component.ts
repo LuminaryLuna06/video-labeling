@@ -240,6 +240,9 @@ export class ImageEditorComponent implements OnInit, OnDestroy {
         
         if (image.image_caption) {
           this.imageCaptionData = { ...image.image_caption };
+          this.imageCaptionKBIds = image.image_caption.knowledge_base_ids || [];
+        } else {
+          this.imageCaptionKBIds = [];
         }
 
         // Load project to get task_type and images list
@@ -826,6 +829,7 @@ export class ImageEditorComponent implements OnInit, OnDestroy {
     // Load region caption
     if (region.caption) {
       this.regionCaptionData = { ...region.caption };
+      this.captionKBIds = region.caption.knowledge_base_ids || [];
     } else {
       this.regionCaptionData = {
         visual_caption: '',
@@ -837,6 +841,7 @@ export class ImageEditorComponent implements OnInit, OnDestroy {
         knowledge_caption_vi: '',
         combined_caption_vi: ''
       };
+      this.captionKBIds = [];
     }
 
     this.drawRegionOverlays();
