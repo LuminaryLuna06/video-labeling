@@ -1785,6 +1785,9 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   saveCaption(): void {
     if (!this.selectedSegment || !this.selectedRegion || !this.video) return;
 
+    const kbIds = this.normalizeKbIds(this.captionKBIds);
+    this.captionKBIds = kbIds;
+
     const data = {
       segment_id: this.selectedSegment.id,
       video_id: this.video.id,
@@ -1794,7 +1797,8 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       knowledge_caption: this.captionData.knowledge_caption,
       knowledge_caption_vi: this.captionData.knowledge_caption_vi,
       combined_caption: this.captionData.combined_caption,
-      combined_caption_vi: this.captionData.combined_caption_vi
+      combined_caption_vi: this.captionData.combined_caption_vi,
+      knowledge_base_ids: kbIds
     };
 
     if (this.captionData.id) {
@@ -1819,6 +1823,9 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   saveSegmentCaption(): void {
     if (!this.selectedSegment || !this.video) return;
 
+    const kbIds = this.normalizeKbIds(this.segmentCaptionKBIds);
+    this.segmentCaptionKBIds = kbIds;
+
     const data = {
       segment_id: this.selectedSegment.id,
       video_id: this.video.id,
@@ -1827,7 +1834,8 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       combined_caption: this.segmentCaptionData.combined_caption,
       contextual_caption_vi: this.segmentCaptionData.contextual_caption_vi,
       knowledge_caption_vi: this.segmentCaptionData.knowledge_caption_vi,
-      combined_caption_vi: this.segmentCaptionData.combined_caption_vi
+      combined_caption_vi: this.segmentCaptionData.combined_caption_vi,
+      knowledge_base_ids: kbIds
     };
 
     if (this.segmentCaptionData.id) {
@@ -1864,6 +1872,29 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         this.snackBar.open('Failed to export video annotations', '', { duration: 3000, panelClass: 'snack-error' });
       }
     });
+  }
+
+  onSegmentKBSelectionChange(nodes: any[]): void {
+    this.segmentCaptionKBIds = this.normalizeKbIds(nodes);
+  }
+
+  onRegionKBSelectionChange(nodes: any[]): void {
+    this.captionKBIds = this.normalizeKbIds(nodes);
+  }
+
+  private normalizeKbIds(values: any[] | null | undefined): string[] {
+    if (!Array.isArray(values)) return [];
+
+    const ids = values
+      .map((value: any) => {
+        if (!value) return '';
+        if (typeof value === 'string') return value;
+        if (typeof value.id === 'string') return value.id;
+        return '';
+      })
+      .filter((id: string) => !!id);
+
+    return Array.from(new Set(ids));
   }
 
   exportProject(): void {
