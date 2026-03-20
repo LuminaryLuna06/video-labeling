@@ -77,6 +77,7 @@ def get_video_segments(video_id):
                 'frame_time': r['frame_time'],
                 'label': r.get('label', ''),
                 'color': r.get('color', '#FF0000'),
+                'knowledge_base_ids': _serialize_object_id_list(r.get('knowledge_base_ids', [])),
                 'has_caption': captions is not None
             })
 
@@ -400,7 +401,22 @@ def update_region(region_id):
     # Reset video approval if was approved
     _reset_video_approval_if_needed(region['video_id'])
 
-    return jsonify({'message': 'Region updated successfully'})
+    updated = current_app.db.object_regions.find_one({'_id': ObjectId(region_id)})
+    return jsonify({
+        'id': str(updated['_id']),
+        'segment_id': str(updated['segment_id']),
+        'video_id': str(updated['video_id']),
+        'frame_time': updated.get('frame_time', 0),
+        'brush_mask': updated.get('brush_mask', ''),
+        'segmented_mask': updated.get('segmented_mask', ''),
+        'label': updated.get('label', ''),
+        'color': updated.get('color', '#FF0000'),
+        'category_id': str(updated['category_id']) if updated.get('category_id') else None,
+        'category_name': updated.get('category_name', ''),
+        'knowledge_base_ids': _serialize_object_id_list(updated.get('knowledge_base_ids', [])),
+        'created_at': updated['created_at'].isoformat(),
+        'updated_at': updated['updated_at'].isoformat() if updated.get('updated_at') else None
+    })
 
 
 @segments_bp.route('/regions/<region_id>', methods=['DELETE'])
