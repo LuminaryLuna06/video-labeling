@@ -15,6 +15,30 @@ from routes.settings import get_dam_url
 segments_bp = Blueprint('segments', __name__)
 
 
+def _serialize_object_id_list(values):
+    if not values:
+        return []
+    result = []
+    for value in values:
+        try:
+            result.append(str(value))
+        except Exception:
+            continue
+    return result
+
+
+def _parse_object_id_list(values):
+    if not isinstance(values, list):
+        return []
+    parsed = []
+    for value in values:
+        try:
+            parsed.append(ObjectId(str(value)))
+        except Exception:
+            continue
+    return parsed
+
+
 def _reset_video_approval_if_needed(video_id):
     """Reset video review status if it was approved (content changed)."""
     video = current_app.db.videos.find_one({'_id': video_id})
@@ -268,6 +292,7 @@ def get_segment_regions(segment_id):
             'color': r.get('color', '#FF0000'),
             'category_id': str(r['category_id']) if r.get('category_id') else None,
             'category_name': r.get('category_name', ''),
+            'knowledge_base_ids': _serialize_object_id_list(r.get('knowledge_base_ids', [])),
             'caption': {
                 'id': str(caption['_id']),
                 'visual_caption': caption.get('visual_caption', ''),
@@ -308,6 +333,7 @@ def create_region(segment_id):
         'color': data.get('color', '#FF0000'),
         'category_id': ObjectId(data['category_id']) if data.get('category_id') else None,
         'category_name': data.get('category_name', ''),
+        'knowledge_base_ids': _parse_object_id_list(data.get('knowledge_base_ids', [])),
         'created_by': request.current_user['_id'],
         'created_at': datetime.now(timezone.utc),
         'updated_at': datetime.now(timezone.utc)
@@ -329,6 +355,7 @@ def create_region(segment_id):
         'color': region['color'],
         'category_id': str(region['category_id']) if region.get('category_id') else None,
         'category_name': region.get('category_name', ''),
+        'knowledge_base_ids': _serialize_object_id_list(region.get('knowledge_base_ids', [])),
         'created_at': region['created_at'].isoformat()
     }), 201
 
@@ -361,6 +388,8 @@ def update_region(region_id):
         update_fields['category_id'] = ObjectId(data['category_id']) if data['category_id'] else None
     if 'category_name' in data:
         update_fields['category_name'] = data['category_name']
+    if 'knowledge_base_ids' in data:
+        update_fields['knowledge_base_ids'] = _parse_object_id_list(data.get('knowledge_base_ids', []))
     update_fields['updated_at'] = datetime.now(timezone.utc)
 
     current_app.db.object_regions.update_one(
