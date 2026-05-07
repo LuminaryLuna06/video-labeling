@@ -864,7 +864,7 @@ def process_export_task(app, task_id, project_id):
 
 @projects_bp.route('/<project_id>/export/subparts/start', methods=['POST'])
 @token_required
-def start_subparts_export(current_user, project_id):
+def start_subparts_export(project_id):
     """Start a background task to export project videos and JSON by subparts."""
     try:
         project = current_app.db.projects.find_one({'_id': ObjectId(project_id)})
@@ -875,7 +875,7 @@ def start_subparts_export(current_user, project_id):
         current_app.db.export_tasks.insert_one({
             '_id': task_id,
             'project_id': project_id,
-            'user_id': str(current_user['_id']),
+            'user_id': str(request.current_user['_id']),
             'status': 'processing',
             'progress': 0,
             'file_path': None,
@@ -897,7 +897,7 @@ def start_subparts_export(current_user, project_id):
 
 @projects_bp.route('/export/status/<task_id>', methods=['GET'])
 @token_required
-def check_export_status(current_user, task_id):
+def check_export_status(task_id):
     """Check the status of an export task."""
     try:
         task = current_app.db.export_tasks.find_one({'_id': task_id})
@@ -905,7 +905,7 @@ def check_export_status(current_user, task_id):
             return jsonify({'error': 'Task not found'}), 404
         
         # Only allow the user who created it to check
-        if task.get('user_id') != str(current_user['_id']):
+        if task.get('user_id') != str(request.current_user['_id']):
             return jsonify({'error': 'Unauthorized'}), 403
 
         return jsonify({
