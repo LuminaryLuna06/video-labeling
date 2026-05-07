@@ -14,3 +14,4 @@ sam2/sav_dataset
 sam2/tools
 sam2/assets
 sam2/SAM_2.egg-info
+.venv/

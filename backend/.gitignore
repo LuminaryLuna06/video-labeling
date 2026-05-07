@@ -1,0 +1,15 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python caching
+__pycache__/
+*.pyc
+
+# Local storage and exports (we don't want to commit big clips, zip files)
+uploads/
+storage/
+
+# Environment files
+.env

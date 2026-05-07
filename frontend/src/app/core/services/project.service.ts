@@ -75,4 +75,18 @@ export class ProjectService {
   exportProject(projectId: string, format: 'json' | 'yolo' | 'coco' | 'csv'): Observable<any> {
     return this.http.get<any>(`${this.API}/${projectId}/export/${format}`);
   }
+
+
+  // ---- Large File Export ----
+  startExportSubparts(projectId: string): Observable<{ task_id: string }> {
+    return this.http.post<{ task_id: string }>(`${this.API}/${projectId}/export/subparts/start`, {});
+  }
+
+  checkExportStatus(taskId: string): Observable<{ status: string, progress: number, error?: string }> {
+    return this.http.get<{ status: string, progress: number, error?: string }>(`${this.API}/export/status/${taskId}`);
+  }
+
+  downloadExportFileUrl(taskId: string): string {
+    return `${this.API}/export/download/${taskId}`;
+  }
 }

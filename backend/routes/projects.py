@@ -1,5 +1,11 @@
-from flask import Blueprint, request, jsonify, current_app
-from datetime import datetime, timezone
+from flask import Blueprint, request, jsonify, current_app, send_file
+import os
+import json
+import uuid
+import threading
+import zipfile
+import time
+from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 from utils.auth_middleware import token_required
 
@@ -729,3 +735,209 @@ def export_videos_json(videos, project):
         data['videos'].append(video_data)
     
     return jsonify(data)
+
+# --- BACKGROUND EXPORT BY SUBPARTS ---
+
+def cleanup_old_exports(export_dir):
+    """Delete export zip files older than 24 hours to free up disk space."""
+    if not os.path.exists(export_dir):
+        return
+    now = datetime.now()
+    for filename in os.listdir(export_dir):
+        if filename.endswith(".zip"):
+            filepath = os.path.join(export_dir, filename)
+            try:
+                # Check modification time
+                mtime = datetime.fromtimestamp(os.path.getmtime(filepath))
+                if now - mtime > timedelta(hours=24):
+                    os.remove(filepath)
+            except Exception as e:
+                print(f"Error cleaning up {filepath}: {e}")
+
+def process_export_task(app, task_id, project_id):
+    """Background thread to process the export into a ZIP file."""
+    with app.app_context():
+        try:
+            db = current_app.db
+            task = db.export_tasks.find_one({'_id': task_id})
+            if not task:
+                return
+
+            # Ensure export directory exists
+            export_dir = os.path.join(current_app.root_path, 'uploads', 'exports')
+            os.makedirs(export_dir, exist_ok=True)
+            
+            # Clean up old exports
+            cleanup_old_exports(export_dir)
+            
+            project = db.projects.find_one({'_id': ObjectId(project_id)})
+            if not project:
+                db.export_tasks.update_one({'_id': task_id}, {'$set': {'status': 'failed', 'error': 'Project not found'}})
+                return
+
+            zip_filename = f"export_{project_id}_{int(time.time())}.zip"
+            zip_filepath = os.path.join(export_dir, zip_filename)
+            
+            # Get all videos for the project
+            videos = list(db.videos.find({'project_id': ObjectId(project_id)}))
+            total_videos = len(videos)
+            if total_videos == 0:
+                # Still create an empty zip or just return empty JSON
+                with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_STORED) as zipf:
+                    zipf.writestr("data.json", json.dumps({"project": str(project_id), "videos": []}))
+                db.export_tasks.update_one({'_id': task_id}, {'$set': {'status': 'completed', 'progress': 100, 'file_path': zip_filepath}})
+                return
+
+            # Get subparts
+            subparts = list(db.subparts.find({'project_id': ObjectId(project_id)}))
+            subpart_map = {str(sp['_id']): sp.get('name', f"Subpart_{sp['_id']}") for sp in subparts}
+
+            # Prepare data per subpart
+            subpart_data = {}
+            processed_count = 0
+
+            with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_STORED) as zipf:
+                for video in videos:
+                    target_subpart_id = str(video.get('subpart_id', 'Unassigned'))
+                    folder_name = subpart_map.get(target_subpart_id, "Unassigned")
+                    
+                    if target_subpart_id not in subpart_data:
+                        subpart_data[target_subpart_id] = {
+                            "folder_name": folder_name,
+                            "videos": []
+                        }
+                    
+                    # Add video file to ZIP if exists
+                    video_filepath = video.get('filepath')
+                    if video_filepath and os.path.exists(video_filepath):
+                        # Chunk stream write is handled implicitly by ZipFile.write
+                        arcname = f"{folder_name}/{os.path.basename(video_filepath)}"
+                        zipf.write(video_filepath, arcname)
+                    
+                    # Gather metadata
+                    video_metadata = {
+                        'id': str(video['_id']),
+                        'filename': video.get('original_name', ''),
+                        'duration': video.get('duration', 0),
+                        'fps': video.get('fps', 0),
+                        'segments': []
+                    }
+                    
+                    segments = list(db.segments.find({'video_id': video['_id']}))
+                    for seg in segments:
+                        video_metadata['segments'].append({
+                            'start_time': seg.get('start_time', 0),
+                            'end_time': seg.get('end_time', 0),
+                            'label': seg.get('label', ''),
+                            'caption': seg.get('caption', {}),
+                            'description': seg.get('description', '')
+                        })
+                    
+                    subpart_data[target_subpart_id]["videos"].append(video_metadata)
+                    
+                    # Update progress
+                    processed_count += 1
+                    progress = int((processed_count / total_videos) * 90) # 90% for copying videos
+                    db.export_tasks.update_one({'_id': task_id}, {'$set': {'progress': progress}})
+                
+                # Write data.json into each subpart folder
+                for sp_id, sp_info in subpart_data.items():
+                    json_data = json.dumps({"videos": sp_info["videos"]}, ensure_ascii=False, indent=2)
+                    arc_json_name = f"{sp_info['folder_name']}/data.json"
+                    zipf.writestr(arc_json_name, json_data)
+            
+            # Finalize
+            db.export_tasks.update_one({
+                '_id': task_id
+            }, {
+                '$set': {
+                    'status': 'completed',
+                    'progress': 100,
+                    'file_path': zip_filepath
+                }
+            })
+
+        except Exception as e:
+            print(f"Export task failed: {str(e)}")
+            db.export_tasks.update_one({'_id': task_id}, {'$set': {'status': 'failed', 'error': str(e)}})
+
+
+@projects_bp.route('/<project_id>/export/subparts/start', methods=['POST'])
+@token_required
+def start_subparts_export(current_user, project_id):
+    """Start a background task to export project videos and JSON by subparts."""
+    try:
+        project = current_app.db.projects.find_one({'_id': ObjectId(project_id)})
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+
+        task_id = str(uuid.uuid4())
+        current_app.db.export_tasks.insert_one({
+            '_id': task_id,
+            'project_id': project_id,
+            'user_id': str(current_user['_id']),
+            'status': 'processing',
+            'progress': 0,
+            'file_path': None,
+            'created_at': datetime.now(timezone.utc)
+        })
+
+        # Spawn background background
+        # Pass the real app instance to the thread so we can create app_context
+        app = current_app._get_current_object()
+        thread = threading.Thread(target=process_export_task, args=(app, task_id, project_id))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({'task_id': task_id}), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@projects_bp.route('/export/status/<task_id>', methods=['GET'])
+@token_required
+def check_export_status(current_user, task_id):
+    """Check the status of an export task."""
+    try:
+        task = current_app.db.export_tasks.find_one({'_id': task_id})
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+        
+        # Only allow the user who created it to check
+        if task.get('user_id') != str(current_user['_id']):
+            return jsonify({'error': 'Unauthorized'}), 403
+
+        return jsonify({
+            'task_id': task['_id'],
+            'status': task.get('status'),
+            'progress': task.get('progress', 0),
+            'error': task.get('error')
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@projects_bp.route('/export/download/<task_id>', methods=['GET'])
+# Note: Usually downloads might be initiated via a hidden link. If frontend passes token in headers, token_required works.
+# If frontend uses <a href="...">, token_required might fail unless passed in query string. We will support both or assume token works for now.
+def download_export(task_id):
+    """Download the completed export zip file."""
+    try:
+        task = current_app.db.export_tasks.find_one({'_id': task_id})
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+
+        if task.get('status') != 'completed':
+            return jsonify({'error': 'Task not completed yet'}), 400
+
+        file_path = task.get('file_path')
+        if not file_path or not os.path.exists(file_path):
+            return jsonify({'error': 'File not found on server (might be cleaned up)'}), 404
+
+        filename = os.path.basename(file_path)
+        return send_file(file_path, as_attachment=True, download_name=filename)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

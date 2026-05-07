@@ -1,4 +1,5 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Subscription, interval } from 'rxjs';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
@@ -37,7 +38,7 @@ import { Project, SubPart, VideoItem, ImageItem, User, Tag } from '../../core/mo
   templateUrl: './project-detail.component.html',
   styleUrls: ['./project-detail.component.scss']
 })
-export class ProjectDetailComponent implements OnInit {
+export class ProjectDetailComponent implements OnInit, OnDestroy {
   Math = Math;
   project: Project | null = null;
   subpartVideos: VideoItem[] = [];
@@ -55,6 +56,14 @@ export class ProjectDetailComponent implements OnInit {
   selectedUsers: string[] = [];
   selectedSubpart: SubPart | null = null;
   user = this.authService.user;
+
+  // Export State
+  exportTaskId: string | null = null;
+  isExporting = false;
+  exportProgress = 0;
+  exportStatusText = '';
+  private pollingSubscription?: Subscription;
+
 
   // Edit Project
   showEditProjectDialog = false;
@@ -947,4 +956,57 @@ export class ProjectDetailComponent implements OnInit {
   logout(): void {
     this.authService.logout();
   }
+
+  ngOnDestroy() {
+    if (this.pollingSubscription) {
+      this.pollingSubscription.unsubscribe();
+    }
+  }
+
+  exportZipBySubparts() {
+    if (!this.project || this.isExporting) return;
+    
+    this.isExporting = true;
+    this.exportProgress = 0;
+    this.exportStatusText = 'Đang khởi tạo lấy danh sách video...';
+    
+    this.projectService.startExportSubparts(this.project.id).subscribe({
+      next: (res) => {
+        this.exportTaskId = res.task_id;
+        this.pollingSubscription = interval(3000).subscribe(() => {
+          this.checkTaskStatus(res.task_id);
+        });
+      },
+      error: (err) => {
+        this.isExporting = false;
+        this.snackBar.open('Lỗi khi bắt đầu tạo export: ' + err.message, 'Đóng', { duration: 3000 });
+      }
+    });
+  }
+
+  checkTaskStatus(taskId: string) {
+    this.projectService.checkExportStatus(taskId).subscribe({
+      next: (res) => {
+        this.exportProgress = res.progress || 0;
+        
+        if (res.status === 'processing') {
+          this.exportStatusText = `Đang nén dữ liệu... ${res.progress}%`;
+        } else if (res.status === 'completed') {
+          this.exportStatusText = 'Hoàn tất! Bắt đầu tải file...';
+          this.isExporting = false;
+          if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
+          
+          const downloadUrl = this.projectService.downloadExportFileUrl(taskId);
+          window.open(downloadUrl, '_blank');
+        } else if (res.status === 'failed') {
+          this.exportStatusText = 'Lỗi nén file: ' + (res.error || 'Server error');
+          this.isExporting = false;
+          if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
+          this.snackBar.open(this.exportStatusText, 'Đóng');
+        }
+      },
+      error: () => {}
+    });
+  }
+
 }
