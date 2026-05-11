@@ -127,7 +127,7 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
   z-index: 1000;
   overflow: hidden;
-  max-height: 300px;
+  max-height: 480px;
   display: flex;
   flex-direction: column;
 }
@@ -292,7 +292,7 @@
 // Node List
 .node-list {
   overflow-y: auto;
-  max-height: 240px;
+  max-height: 420px;
   padding: 6px 0;
 
   &::-webkit-scrollbar {
@@ -322,6 +322,20 @@
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.15s ease;
+  position: relative;
+
+  &.tree-node {
+    margin: 0 2px;
+
+    .tree-indent-line {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: rgba(255, 255, 255, 0.08);
+      pointer-events: none;
+    }
+  }
 
   &:hover {
     background: rgba(255, 255, 255, 0.05);

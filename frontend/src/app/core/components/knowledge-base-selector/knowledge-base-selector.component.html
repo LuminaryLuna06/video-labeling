@@ -2,7 +2,7 @@
   @if (label) {
     <label class="selector-label">{{ label }}</label>
   }
-  
+
   <!-- Selected Items -->
   <div class="selected-items" (click)="openDropdown()">
     @if (selectedNodes.length === 0) {
@@ -16,10 +16,12 @@
       </div>
     }
     <input
+      #searchInput
       class="search-input"
       [(ngModel)]="searchQuery"
       (input)="filterNodes()"
       (focus)="openDropdown()"
+      (click)="$event.stopPropagation()"
       [placeholder]="selectedNodes.length > 0 ? 'Add more...' : ''"
     >
     <mat-icon class="dropdown-icon">{{ showDropdown ? 'expand_less' : 'expand_more' }}</mat-icon>
@@ -86,11 +88,11 @@
         </div>
       }
 
-      <!-- Node List -->
-      @if (!loading && filteredNodes.length > 0) {
+      <!-- Search results (flat filtered list) -->
+      @if (!loading && searchQuery && filteredNodes.length > 0) {
         <div class="node-list">
           @for (node of filteredNodes; track node.id) {
-            <div 
+            <div
               class="node-item"
               [class.selected]="isSelected(node)"
               (click)="selectNode(node)"
@@ -112,8 +114,39 @@
         </div>
       }
 
+      <!-- Tree view (when not searching) -->
+      @if (!loading && !searchQuery && treeNodes.length > 0) {
+        <div class="node-list">
+          @for (node of treeNodes; track node.id) {
+            <div
+              class="node-item tree-node"
+              [class.selected]="isSelected(node)"
+              [class.has-children]="node.hasChildren"
+              [style.paddingLeft.px]="14 + node.depth * 18"
+              (click)="selectNode(node)"
+            >
+              @if (node.depth > 0) {
+                <span class="tree-indent-line" [style.left.px]="14 + (node.depth - 1) * 18 + 9"></span>
+              }
+              <div class="node-icon" [style.background]="getTypeColor(node.type) + '22'" [style.color]="getTypeColor(node.type)">
+                <mat-icon>{{ getTypeIcon(node.type) }}</mat-icon>
+              </div>
+              <div class="node-content">
+                <span class="node-name">{{ node.name }}</span>
+                @if (node.description) {
+                  <span class="node-desc">{{ node.description }}</span>
+                }
+              </div>
+              @if (isSelected(node)) {
+                <mat-icon class="check-icon">check</mat-icon>
+              }
+            </div>
+          }
+        </div>
+      }
+
       <!-- Empty State -->
-      @if (!loading && filteredNodes.length === 0) {
+      @if (!loading && searchQuery && filteredNodes.length === 0) {
         <div class="empty-state">
           <mat-icon>search_off</mat-icon>
           <span>No matching knowledge found</span>
@@ -122,6 +155,13 @@
               Create "{{ searchQuery }}"
             </button>
           }
+        </div>
+      }
+
+      @if (!loading && !searchQuery && treeNodes.length === 0) {
+        <div class="empty-state">
+          <mat-icon>account_tree</mat-icon>
+          <span>No knowledge nodes found</span>
         </div>
       }
     </div>
