@@ -11,6 +11,7 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { SettingsService, AppSettings } from '../../core/services/settings.service';
+import { DamService } from '../../core/services/dam.service';
 
 @Component({
   selector: 'app-settings-dialog',
@@ -35,26 +36,33 @@ export class SettingsDialogComponent implements OnInit {
   constructor(
     public dialogRef: MatDialogRef<SettingsDialogComponent>,
     private settingsService: SettingsService,
+    private dam: DamService,
     private snackBar: MatSnackBar
   ) {
     this.form = { ...this.settingsService.get() };
+    this.damServerUrl = this.form.dam_server_url || 'http://localhost:8000';
   }
 
   ngOnInit(): void {
-    // Load all settings from backend so they persist across browsers.
+    // Sync non-DAM settings (Gemini, prompts, timezone) from backend so they
+    // persist across browsers. DAM URL stays local-only.
     this.settingsService.syncAllFromBackend().subscribe({
       next: (remote) => {
-        this.form = { ...remote };
-        this.damServerUrl = remote.dam_server_url || '';
+        const localDam = this.damServerUrl;
+        this.form = { ...remote, dam_server_url: localDam };
+        // Preserve whatever the user typed / previously saved locally:
+        this.damServerUrl = localDam;
       },
       error: () => {
-        this.damServerUrl = this.form.dam_server_url || '';
+        // Backend unreachable: keep the local form as-is.
+        this.damServerUrl = this.form.dam_server_url || 'http://localhost:8000';
       }
     });
   }
 
   testConnection(): void {
-    if (!this.damServerUrl.trim()) {
+    const url = this.damServerUrl.trim();
+    if (!url) {
       this.connectionStatus = 'error';
       this.connectionMessage = 'Please enter a URL';
       return;
@@ -63,7 +71,7 @@ export class SettingsDialogComponent implements OnInit {
     this.connectionStatus = '';
     this.connectionMessage = '';
 
-    this.settingsService.testDamConnection(this.damServerUrl.trim()).subscribe({
+    this.dam.testConnection(url).subscribe({
       next: (res) => {
         this.testingConnection = false;
         this.connectionStatus = 'ok';
@@ -72,7 +80,7 @@ export class SettingsDialogComponent implements OnInit {
       error: (err) => {
         this.testingConnection = false;
         this.connectionStatus = 'error';
-        this.connectionMessage = err.error?.message || 'Connection failed';
+        this.connectionMessage = err?.message || 'Connection failed';
       }
     });
   }
@@ -84,20 +92,30 @@ export class SettingsDialogComponent implements OnInit {
   }
 
   save(): void {
+    const localDamUrl = this.damServerUrl.trim() || 'http://localhost:8000';
+
+    // Persist DAM URL to localStorage only.
+    this.settingsService.save({ dam_server_url: localDamUrl });
+
+    // Build a backend payload that excludes DAM (so we don't overwrite the
+    // shared production DAM URL in the remote MongoDB).
     const payload: AppSettings = {
       ...this.form,
       gemini_api_key: (this.form.gemini_api_key || '').trim(),
       gemini_model: (this.form.gemini_model || '').trim() || 'gemini-2.0-flash',
-      dam_server_url: this.damServerUrl.trim(),
+      dam_server_url: '', // ignored by backend save below, but kept for type compatibility
     };
 
-    this.settingsService.saveAllSettings(payload).subscribe({
+    this.settingsService.saveAllSettings({ ...payload, dam_server_url: this.form.dam_server_url || '' }).subscribe({
       next: () => {
+        // Re-assert local DAM URL after the backend sync writes its (shared) value.
+        this.settingsService.save({ dam_server_url: localDamUrl });
         this.snackBar.open('Settings saved', '', { duration: 2000, panelClass: 'snack-success' });
         this.dialogRef.close(true);
       },
       error: () => {
-        this.snackBar.open('Failed to save one or more settings', '', { duration: 3000, panelClass: 'snack-error' });
+        // Still ok: local DAM was persisted above.
+        this.snackBar.open('Saved locally; backend save failed for other settings', '', { duration: 3000, panelClass: 'snack-error' });
         this.dialogRef.close(true);
       }
     });
