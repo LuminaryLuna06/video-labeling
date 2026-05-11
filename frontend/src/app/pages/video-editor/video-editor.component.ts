@@ -48,6 +48,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('frameCanvas') frameCanvasRef!: ElementRef<HTMLCanvasElement>;
   @ViewChild('drawCanvas') drawCanvasRef!: ElementRef<HTMLCanvasElement>;
   @ViewChild('maskCanvas') maskCanvasRef!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('canvasContainer') canvasContainerRef?: ElementRef<HTMLDivElement>;
   @ViewChild('captionCanvas') captionCanvasRef!: ElementRef<HTMLCanvasElement>;
   @ViewChild('segmentPreviewVideo') segmentPreviewVideoRef!: ElementRef<HTMLVideoElement>;
 
@@ -101,6 +102,12 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   private panOriginX = 0;
   private panOriginY = 0;
   spaceHeld = false;
+
+  // Canvas wrapper letterbox sizing (Step 2)
+  wrapperWidth = 0;
+  wrapperHeight = 0;
+  private frameAspect = 0; // canvas-buffer aspect ratio: w / h
+  private canvasResizeObserver?: ResizeObserver;
 
   // Captions
   captionData: Caption = {
@@ -199,9 +206,26 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     this.loadVideo(videoId);
   }
 
-  ngAfterViewInit(): void {}
+  ngAfterViewInit(): void {
+    this.setupCanvasContainerObserver();
+  }
+
+  private observedCanvasContainer?: HTMLElement;
+  private setupCanvasContainerObserver(): void {
+    if (typeof ResizeObserver === 'undefined') return;
+    const el = this.canvasContainerRef?.nativeElement;
+    if (!el) return;
+    // Step 2 can be entered/left repeatedly; the *ngIf recreates the
+    // element each time, so retarget the observer when the element changes.
+    if (this.observedCanvasContainer === el) return;
+    this.canvasResizeObserver?.disconnect();
+    this.canvasResizeObserver = new ResizeObserver(() => this.updateWrapperSize());
+    this.canvasResizeObserver.observe(el);
+    this.observedCanvasContainer = el;
+  }
 
   ngOnDestroy(): void {
+    this.canvasResizeObserver?.disconnect();
     if (this.videoPlayerRef?.nativeElement) {
       this.videoPlayerRef.nativeElement.pause();
     }
@@ -262,6 +286,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Run once after loadVideo or setStep to bootstrap the active step */
   private initCurrentStep(): void {
     if (this.currentStep === 2) {
+      setTimeout(() => this.setupCanvasContainerObserver(), 0);
       if (!this.selectedSegment && this.segments.length > 0) {
         this.selectedSegment = this.segments[0];
       }
@@ -460,6 +485,11 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       this.videoService.updateVideo(this.video.id, { current_step: step } as any).subscribe();
     }
     this.initCurrentStep();
+    if (step === 2) {
+      // The canvas container only exists in the DOM on Step 2 — observe it
+      // once it renders so resize / panel-resize recomputes the wrapper size.
+      setTimeout(() => this.setupCanvasContainerObserver(), 0);
+    }
   }
 
   // ============ Object Segmentation (Step 2) ============
@@ -524,6 +554,8 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         maskCanvas.width = w;
         maskCanvas.height = h;
       }
+      this.frameAspect = w / h;
+      this.updateWrapperSize();
 
       const ctx = frameCanvas.getContext('2d')!;
       ctx.drawImage(video, 0, 0, w, h);
@@ -537,6 +569,22 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     };
     video.load();
     setTimeout(() => { video.currentTime = this.frameTime; }, 300);
+  }
+
+  private updateWrapperSize(): void {
+    const el = this.canvasContainerRef?.nativeElement;
+    if (!el || !this.frameAspect) return;
+    const cw = el.clientWidth;
+    const ch = el.clientHeight;
+    if (cw === 0 || ch === 0) return;
+    const containerAspect = cw / ch;
+    if (containerAspect > this.frameAspect) {
+      this.wrapperHeight = ch;
+      this.wrapperWidth = Math.round(ch * this.frameAspect);
+    } else {
+      this.wrapperWidth = cw;
+      this.wrapperHeight = Math.round(cw / this.frameAspect);
+    }
   }
 
   // ---- Zoom & Pan ----

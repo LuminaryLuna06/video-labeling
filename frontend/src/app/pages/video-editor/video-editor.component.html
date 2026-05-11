@@ -327,8 +327,10 @@
           </div>
         </div>
 
-        <div class="canvas-container" (wheel)="onCanvasWheel($event)">
+        <div class="canvas-container" #canvasContainer (wheel)="onCanvasWheel($event)">
           <div class="canvas-zoom-wrapper" [class.pan-active]="panMode || spaceHeld"
+               [style.width.px]="wrapperWidth || null"
+               [style.height.px]="wrapperHeight || null"
                [style.transform]="'scale(' + zoomLevel + ') translate(' + panX + 'px,' + panY + 'px)'"
                (mousedown)="onCanvasMouseDown($event)"
                (mousemove)="onCanvasMouseMove($event)"
