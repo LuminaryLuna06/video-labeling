@@ -1,7 +1,7 @@
 // frontend/src/app/core/services/dam.service.ts
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, from, throwError } from 'rxjs';
+import { Observable, from, throwError, forkJoin } from 'rxjs';
 import { catchError, map, switchMap } from 'rxjs/operators';
 import { SettingsService } from './settings.service';
 import { composeRgba, composeFullMaskRgba, padOrTrimFrames } from '../utils/rgba-compose';
@@ -105,6 +105,33 @@ export class DamService {
     return from(Promise.all(padded.map(composer))).pipe(
       switchMap((rgbaList) => this.callDamChat(rgbaList, prompt)),
       map((caption) => ({ caption, caption_type: captionType }))
+    );
+  }
+
+  /**
+   * Run visual + contextual caption generation in parallel.
+   * Mirrors backend /api/annotations/generate-caption-batch.
+   */
+  generateCaptionBatch(
+    frames: string[],
+    maskImage: string
+  ): Observable<{ visual_caption: string; contextual_caption: string; warnings?: string[] }> {
+    const warnings: string[] = [];
+    if (!maskImage) {
+      warnings.push('mask_image was empty; visual caption skipped');
+    }
+
+    const visual$ = maskImage
+      ? this.generateCaption(frames, maskImage, 'visual')
+      : from(Promise.resolve({ caption: '', caption_type: 'visual' as const }));
+    const contextual$ = this.generateCaption(frames, maskImage, 'contextual');
+
+    return forkJoin({ visual: visual$, contextual: contextual$ }).pipe(
+      map(({ visual, contextual }) => ({
+        visual_caption: visual.caption,
+        contextual_caption: contextual.caption,
+        ...(warnings.length ? { warnings } : {})
+      }))
     );
   }
 
