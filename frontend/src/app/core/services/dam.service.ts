@@ -37,7 +37,7 @@ export class DamService {
   testConnection(url: string): Observable<{ status: 'ok' | 'error'; message: string; details?: DamHealthResponse }> {
     const target = url.trim().replace(/\/+$/, '');
     if (!target) {
-      return throwError(() => new Error('URL is required'));
+      return throwError(() => ({ status: 'error' as const, message: 'URL is required' }));
     }
     return this.http.get<DamHealthResponse>(`${target}/health`).pipe(
       map((details) => ({
@@ -52,7 +52,7 @@ export class DamService {
     );
   }
 
-  protected formatError(target: string, err: any): string {
+  private formatError(target: string, err: any): string {
     if (err?.status === 0) {
       return `Cannot reach DAM at ${target}. Check the URL in Settings and that the server is running.`;
     }
