@@ -4,6 +4,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, throwError } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
 import { SettingsService } from './settings.service';
+import { SegmentationResponse } from '../models';
 
 export interface DamHealthResponse {
   status: string;
@@ -49,6 +50,20 @@ export class DamService {
         status: 'error' as const,
         message: this.formatError(target, err)
       })))
+    );
+  }
+
+  /**
+   * Send a brush mask + frame image to DAM's /segment endpoint (SAM2-backed).
+   * Returns a refined object mask.
+   */
+  segmentObject(brushMask: string, frameImage?: string): Observable<SegmentationResponse> {
+    const url = `${this.getDamUrl()}/segment`;
+    return this.http.post<SegmentationResponse>(url, {
+      brush_mask: brushMask,
+      frame_image: frameImage ?? ''
+    }).pipe(
+      catchError((err) => throwError(() => new Error(this.formatError(url, err))))
     );
   }
 
