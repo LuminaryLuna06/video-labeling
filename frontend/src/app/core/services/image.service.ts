@@ -1,8 +1,10 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { ImageItem, ImageRegion, ImageQA, Caption, Category, SegmentationResponse, ImageQCStats, ImageClassification } from '../models';
 import { DamService } from './dam.service';
+import { normalizeImage } from '../utils/media-url';
 
 @Injectable({ providedIn: 'root' })
 export class ImageService {
@@ -19,7 +21,7 @@ export class ImageService {
     if (subpartId) formData.append('subpart_id', subpartId);
     if (width) formData.append('width', width.toString());
     if (height) formData.append('height', height.toString());
-    return this.http.post(`${this.API}/upload`, formData);
+    return this.http.post<ImageItem>(`${this.API}/upload`, formData).pipe(map(normalizeImage));
   }
 
   uploadImagesBatch(projectId: string, files: File[], subpartId?: string): Observable<any> {
@@ -27,19 +29,28 @@ export class ImageService {
     formData.append('project_id', projectId);
     if (subpartId) formData.append('subpart_id', subpartId);
     files.forEach(file => formData.append('images', file));
-    return this.http.post(`${this.API}/upload-batch`, formData);
+    return this.http.post<{ images?: ImageItem[] } | ImageItem[]>(`${this.API}/upload-batch`, formData)
+      .pipe(map(res => {
+        if (Array.isArray(res)) return res.map(normalizeImage);
+        if (res && Array.isArray((res as any).images)) {
+          return { ...(res as any), images: (res as any).images.map(normalizeImage) };
+        }
+        return res;
+      }));
   }
 
   getProjectImages(projectId: string): Observable<ImageItem[]> {
-    return this.http.get<ImageItem[]>(`${this.API}/project/${projectId}`);
+    return this.http.get<ImageItem[]>(`${this.API}/project/${projectId}`)
+      .pipe(map(images => images.map(normalizeImage)));
   }
 
   getSubpartImages(subpartId: string): Observable<ImageItem[]> {
-    return this.http.get<ImageItem[]>(`${this.API}/subpart/${subpartId}`);
+    return this.http.get<ImageItem[]>(`${this.API}/subpart/${subpartId}`)
+      .pipe(map(images => images.map(normalizeImage)));
   }
 
   getImage(imageId: string): Observable<ImageItem> {
-    return this.http.get<ImageItem>(`${this.API}/${imageId}`);
+    return this.http.get<ImageItem>(`${this.API}/${imageId}`).pipe(map(normalizeImage));
   }
 
   updateImage(imageId: string, data: Partial<ImageItem>): Observable<any> {
@@ -181,7 +192,10 @@ export class ImageService {
     return this.http.post<ImageSearchResult>(`${this.API}/search`, {
       query_image: queryImage,
       ...options
-    });
+    }).pipe(map(res => ({
+      ...res,
+      results: res.results.map(r => r.image ? { ...r, image: normalizeImage(r.image) } : r),
+    })));
   }
 }
 
