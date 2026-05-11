@@ -132,7 +132,7 @@
 
 <div class="editor-body" *ngIf="video">
   <!-- Hidden video for frame extraction (shared across steps) -->
-  <video #segVideoPlayer [src]="video.url" style="display:none"></video>
+  <video #segVideoPlayer [src]="video.url" preload="auto" style="display:none"></video>
 
   <!-- =================== STEP 1: VIDEO SEGMENTATION =================== -->
   <div class="step-content" *ngIf="currentStep === 1">

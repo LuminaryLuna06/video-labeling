@@ -543,8 +543,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     const drawCanvas = this.drawCanvasRef.nativeElement;
     const maskCanvas = this.maskCanvasRef?.nativeElement;
 
-    video.currentTime = this.frameTime;
-    video.onseeked = () => {
+    const drawFrame = () => {
       const w = 800;
       const h = Math.round((video.videoHeight / video.videoWidth) * w) || 450;
 
@@ -560,15 +559,37 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       const ctx = frameCanvas.getContext('2d')!;
       ctx.drawImage(video, 0, 0, w, h);
 
-      // Clear draw canvas
       const dCtx = drawCanvas.getContext('2d')!;
       dCtx.clearRect(0, 0, w, h);
       this.hasDrawing = false;
 
       if (onLoaded) onLoaded();
     };
-    video.load();
-    setTimeout(() => { video.currentTime = this.frameTime; }, 300);
+
+    const seekAndDraw = () => {
+      // If we're already at (or very near) the target time, the browser won't
+      // fire 'seeked' — draw immediately.
+      if (Math.abs(video.currentTime - this.frameTime) < 0.01) {
+        drawFrame();
+        return;
+      }
+      video.onseeked = () => {
+        video.onseeked = null;
+        drawFrame();
+      };
+      video.currentTime = this.frameTime;
+    };
+
+    // HAVE_METADATA = 1; currentTime is meaningful from here on.
+    if (video.readyState >= 1 && video.videoWidth > 0) {
+      seekAndDraw();
+    } else {
+      const onMeta = () => {
+        video.removeEventListener('loadedmetadata', onMeta);
+        seekAndDraw();
+      };
+      video.addEventListener('loadedmetadata', onMeta);
+    }
   }
 
   private updateWrapperSize(): void {
