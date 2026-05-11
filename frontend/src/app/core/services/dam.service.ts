@@ -32,11 +32,11 @@ export class DamService {
     'environment, spatial relationships between objects, and what is happening across the frames.';
 
   /**
-   * Resolve the DAM base URL. Reads from SettingsService (which is backed by localStorage).
+   * Resolve the DAM base URL. Reads from SettingsService (which is backed by dedicated localStorage).
    * Falls back to DEFAULT_DAM_URL if blank.
    */
   private getDamUrl(): string {
-    const url = (this.settings.get().dam_server_url || '').trim();
+    const url = (this.settings.getLocalDamUrl() || '').trim();
     return (url || DEFAULT_DAM_URL).replace(/\/+$/, '');
   }
 

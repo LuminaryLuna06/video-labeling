@@ -48,6 +48,23 @@ import cv2
 from typing import AsyncGenerator, Generator
 from torchvision import transforms
 
+# --- DAM compatibility shims for newer transformers ---
+# 1. transformers >= 4.50 moved no_init_weights out of modeling_utils; the
+#    shipped dam package still imports it from the old path.
+# 2. transformers >= 5 added all_tied_weights_keys (dict); DAM-bundled
+#    submodels (e.g. MultimodalProjector) only define the older
+#    _tied_weights_keys list. Default to {} so the iteration is a no-op —
+#    tied-weights bookkeeping is diagnostic only, doesn't affect inference.
+import transformers.modeling_utils as _mu
+if not hasattr(_mu, "no_init_weights"):
+    try:
+        from transformers.initialization import no_init_weights as _niw
+        _mu.no_init_weights = _niw
+    except ImportError:
+        pass
+if not hasattr(_mu.PreTrainedModel, "all_tied_weights_keys"):
+    _mu.PreTrainedModel.all_tied_weights_keys = {}
+
 from dam import DescribeAnythingModel, DEFAULT_IMAGE_TOKEN, disable_torch_init
 
 # ============ Global Variables ============
@@ -323,8 +340,12 @@ async def chat_completions(request: ChatCompletionRequest):
                 raise ValueError(
                     f"Only 1 image and video (with 8 frames) are supported, but {len(images)} images are provided")
         else:
-            assert len(images) == 1, "Only one image with mask is supported"
-            query = f"{DEFAULT_IMAGE_TOKEN}\n{query}"
+            if len(images) == 8:
+                # Handle video even if image_video_joint_checkpoint is not set (e.g., using DAM-3B-Video but forgot flag)
+                query = f"Video: {DEFAULT_IMAGE_TOKEN * 8}\n{query}"
+            else:
+                assert len(images) == 1, f"Expected 1 image or 8 frames, but got {len(images)}."
+                query = f"{DEFAULT_IMAGE_TOKEN}\n{query}"
 
         # Print the query for debugging
         # print(f"Query: {query}")

@@ -40,7 +40,7 @@ export class SettingsDialogComponent implements OnInit {
     private snackBar: MatSnackBar
   ) {
     this.form = { ...this.settingsService.get() };
-    this.damServerUrl = this.form.dam_server_url || 'http://localhost:8000';
+    this.damServerUrl = this.settingsService.getLocalDamUrl() || 'http://localhost:8000';
   }
 
   ngOnInit(): void {
@@ -48,14 +48,10 @@ export class SettingsDialogComponent implements OnInit {
     // persist across browsers. DAM URL stays local-only.
     this.settingsService.syncAllFromBackend().subscribe({
       next: (remote) => {
-        const localDam = this.damServerUrl;
-        this.form = { ...remote, dam_server_url: localDam };
-        // Preserve whatever the user typed / previously saved locally:
-        this.damServerUrl = localDam;
+        this.form = { ...remote };
       },
       error: () => {
         // Backend unreachable: keep the local form as-is.
-        this.damServerUrl = this.form.dam_server_url || 'http://localhost:8000';
       }
     });
   }
@@ -94,28 +90,23 @@ export class SettingsDialogComponent implements OnInit {
   save(): void {
     const localDamUrl = this.damServerUrl.trim() || 'http://localhost:8000';
 
-    // Persist DAM URL to localStorage only.
-    this.settingsService.save({ dam_server_url: localDamUrl });
+    // Persist DAM URL to its dedicated local storage key
+    this.settingsService.saveLocalDamUrl(localDamUrl);
 
-    // Build a backend payload that excludes DAM (so we don't overwrite the
-    // shared production DAM URL in the remote MongoDB).
+    // Build a backend payload for the shared settings
     const payload: AppSettings = {
       ...this.form,
       gemini_api_key: (this.form.gemini_api_key || '').trim(),
       gemini_model: (this.form.gemini_model || '').trim() || 'gemini-2.0-flash',
-      dam_server_url: '', // empty so backend keeps its production value via `or get_dam_url()` fallback
     };
 
     this.settingsService.saveAllSettings(payload).subscribe({
       next: () => {
-        // Re-assert local DAM URL after the backend sync writes its (shared) value.
-        this.settingsService.save({ dam_server_url: localDamUrl });
         this.snackBar.open('Settings saved', '', { duration: 2000, panelClass: 'snack-success' });
         this.dialogRef.close(true);
       },
       error: () => {
-        // Still ok: local DAM was persisted above.
-        this.snackBar.open('Saved locally; backend save failed for other settings', '', { duration: 3000, panelClass: 'snack-error' });
+        this.snackBar.open('Saved locally; backend save failed', '', { duration: 3000, panelClass: 'snack-error' });
         this.dialogRef.close(true);
       }
     });

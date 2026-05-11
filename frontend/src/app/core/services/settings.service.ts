@@ -7,12 +7,12 @@ export interface AppSettings {
   gemini_model: string;
   translate_prompt_en_to_vi: string;
   translate_prompt_vi_to_en: string;
-  dam_server_url: string;
   gemini_combine_prompt: string;
   timezone: string;  // e.g., 'Asia/Ho_Chi_Minh', 'UTC'
 }
 
 const STORAGE_KEY = 'annotator_settings';
+const DAM_URL_STORAGE_KEY = 'dam_server_url_local';
 
 const DEFAULT_SETTINGS: AppSettings = {
   gemini_api_key: '',
@@ -21,7 +21,6 @@ const DEFAULT_SETTINGS: AppSettings = {
     'Translate the following English text to Vietnamese. Keep technical terms as-is. Only return the translated text, nothing else.\n\nText: {{text}}',
   translate_prompt_vi_to_en:
     'Translate the following Vietnamese text to English. Keep technical terms as-is. Only return the translated text, nothing else.\n\nText: {{text}}',
-  dam_server_url: '',
   gemini_combine_prompt:
     'Combine the following captions into a single, coherent description. Only return the combined text, nothing else.\n\nCaptions: {{captions}}',
   timezone: 'Asia/Ho_Chi_Minh',  // Default to Vietnam timezone
@@ -52,9 +51,13 @@ export class SettingsService {
   }
 
   private applyRemoteSettings(remote: Partial<AppSettings>): void {
+    // Strip dam_server_url if it accidentally comes from backend
+    const { ...cleanedRemote } = remote as any;
+    delete cleanedRemote.dam_server_url;
+    
     const updated = {
       ...this.settings(),
-      ...remote,
+      ...cleanedRemote,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
     this.settings.set(updated);
@@ -84,8 +87,17 @@ export class SettingsService {
     );
   }
 
-  // ---- DAM Server URL (synced with backend DB) ----
+  // ---- Independent DAM Server URL Logic ----
+  
+  getLocalDamUrl(): string {
+    return localStorage.getItem(DAM_URL_STORAGE_KEY) || '';
+  }
 
+  saveLocalDamUrl(url: string): void {
+    localStorage.setItem(DAM_URL_STORAGE_KEY, url);
+  }
+
+  // Backend Sync (If needed for shared config, but local takes precedence)
   getDamUrl(): Observable<{ dam_server_url: string }> {
     return this.http.get<{ dam_server_url: string }>(`${this.SETTINGS_API}/dam-url`);
   }
