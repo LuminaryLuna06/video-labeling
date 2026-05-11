@@ -1,9 +1,10 @@
 // frontend/src/app/core/services/dam.service.ts
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, throwError } from 'rxjs';
-import { catchError, map } from 'rxjs/operators';
+import { Observable, from, throwError } from 'rxjs';
+import { catchError, map, switchMap } from 'rxjs/operators';
 import { SettingsService } from './settings.service';
+import { composeRgba, composeFullMaskRgba, padOrTrimFrames } from '../utils/rgba-compose';
 import { SegmentationResponse } from '../models';
 
 export interface DamHealthResponse {
@@ -21,6 +22,14 @@ export class DamService {
     private http: HttpClient,
     private settings: SettingsService
   ) {}
+
+  private readonly VISUAL_PROMPT =
+    '\nDescribe the masked region in detail. Focus on the visual appearance, ' +
+    'shape, color, texture, and any distinguishing features of the object across the video frames.';
+
+  private readonly CONTEXTUAL_PROMPT =
+    '\nDescribe the overall scene in this video segment. Focus on the context, ' +
+    'environment, spatial relationships between objects, and what is happening across the frames.';
 
   /**
    * Resolve the DAM base URL. Reads from SettingsService (which is backed by localStorage).
@@ -63,6 +72,68 @@ export class DamService {
       brush_mask: brushMask,
       frame_image: frameImage ?? ''
     }).pipe(
+      catchError((err) => throwError(() => new Error(this.formatError(url, err))))
+    );
+  }
+
+  /**
+   * Generate a visual or contextual caption for a region.
+   * Mirrors backend /api/annotations/generate-caption.
+   *
+   * Visual: every frame gets the object mask as alpha.
+   * Contextual: every frame gets a full-white mask (entire frame is the region).
+   */
+  generateCaption(
+    frames: string[],
+    maskImage: string,
+    captionType: 'visual' | 'contextual'
+  ): Observable<{ caption: string; caption_type: 'visual' | 'contextual' }> {
+    if (!frames || frames.length === 0) {
+      return throwError(() => new Error('frames is required'));
+    }
+    if (captionType === 'visual' && !maskImage) {
+      return throwError(() => new Error('mask_image is required for visual caption'));
+    }
+
+    const padded = padOrTrimFrames(frames, 8);
+    const composer =
+      captionType === 'visual'
+        ? (f: string) => composeRgba(f, maskImage)
+        : (f: string) => composeFullMaskRgba(f);
+    const prompt = captionType === 'visual' ? this.VISUAL_PROMPT : this.CONTEXTUAL_PROMPT;
+
+    return from(Promise.all(padded.map(composer))).pipe(
+      switchMap((rgbaList) => this.callDamChat(rgbaList, prompt)),
+      map((caption) => ({ caption, caption_type: captionType }))
+    );
+  }
+
+  private callDamChat(rgbaImages: string[], prompt: string): Observable<string> {
+    const url = `${this.getDamUrl()}/chat/completions`;
+    const content: any[] = rgbaImages.map((rgba) => ({
+      type: 'image_url',
+      image_url: { url: rgba }
+    }));
+    content.push({ type: 'text', text: prompt });
+
+    const payload = {
+      model: 'describe_anything_model',
+      messages: [{ role: 'user', content }],
+      max_tokens: 512,
+      temperature: 0.2,
+      top_p: 0.5,
+      use_cache: true,
+      num_beams: 1
+    };
+
+    return this.http.post<any>(url, payload).pipe(
+      map((res) => {
+        const text = res?.choices?.[0]?.message?.content;
+        if (typeof text !== 'string') {
+          throw new Error('DAM returned an unexpected response shape');
+        }
+        return text;
+      }),
       catchError((err) => throwError(() => new Error(this.formatError(url, err))))
     );
   }
