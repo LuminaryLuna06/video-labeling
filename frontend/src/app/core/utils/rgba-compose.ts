@@ -28,14 +28,16 @@ export async function composeRgba(frameB64: string, maskB64: string): Promise<st
   const frameCanvas = document.createElement('canvas');
   frameCanvas.width = w;
   frameCanvas.height = h;
-  const frameCtx = frameCanvas.getContext('2d')!;
+  const frameCtx = frameCanvas.getContext('2d');
+  if (!frameCtx) throw new Error('Canvas 2D context unavailable');
   frameCtx.drawImage(frame, 0, 0);
   const frameData = frameCtx.getImageData(0, 0, w, h);
 
   const maskCanvas = document.createElement('canvas');
   maskCanvas.width = w;
   maskCanvas.height = h;
-  const maskCtx = maskCanvas.getContext('2d')!;
+  const maskCtx = maskCanvas.getContext('2d');
+  if (!maskCtx) throw new Error('Canvas 2D context unavailable');
   maskCtx.imageSmoothingEnabled = false; // mimic PIL Image.NEAREST
   maskCtx.drawImage(mask, 0, 0, w, h);
   const maskData = maskCtx.getImageData(0, 0, w, h);
@@ -63,7 +65,8 @@ export async function composeFullMaskRgba(frameB64: string): Promise<string> {
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
-  const ctx = canvas.getContext('2d')!;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
   ctx.drawImage(frame, 0, 0);
   // drawImage already produces alpha=255 for opaque sources; this is explicit and safe.
   const data = ctx.getImageData(0, 0, w, h);
