@@ -120,6 +120,9 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   imageFilter = 'all';
   imagePage = 1;
   imagePageSize = 12;
+
+  // URL-sync gate: avoid writing to the URL during initial restoration.
+  private urlSyncReady = false;
   indexingImages = false;
   imageIndexProgress = 0;
   imageIndexCurrent = 0;
@@ -162,6 +165,12 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   setSubpartFilter(filter: string): void {
     this.subpartFilter = filter;
     this.subpartPage = 1;
+    this.syncUrlState();
+  }
+
+  setSubpartPage(p: number): void {
+    this.subpartPage = this.clampPage(p, this.subpartTotalPages);
+    this.syncUrlState();
   }
 
   getSubpartCountByStatus(status: string): number {
@@ -186,6 +195,12 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   setVideoFilter(filter: string): void {
     this.videoFilter = filter;
     this.videoPage = 1;
+    this.syncUrlState();
+  }
+
+  setVideoPage(p: number): void {
+    this.videoPage = this.clampPage(p, this.videoTotalPages);
+    this.syncUrlState();
   }
 
   getVideoCountByStatus(status: string): number {
@@ -210,6 +225,54 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   setImageFilter(filter: string): void {
     this.imageFilter = filter;
     this.imagePage = 1;
+    this.syncUrlState();
+  }
+
+  setImagePage(p: number): void {
+    this.imagePage = this.clampPage(p, this.imageTotalPages);
+    this.syncUrlState();
+  }
+
+  private clampPage(p: number, total: number): number {
+    if (!Number.isFinite(p) || p < 1) return 1;
+    return Math.min(Math.max(1, Math.floor(p)), Math.max(1, total));
+  }
+
+  private syncUrlState(): void {
+    if (!this.urlSyncReady) return;
+    const qp: { [k: string]: string | null } = {
+      subpartId: this.selectedSubpart?.id || null,
+      spF: this.subpartFilter === 'all' ? null : this.subpartFilter,
+      spP: this.subpartPage > 1 ? String(this.subpartPage) : null,
+      vF: this.videoFilter === 'all' ? null : this.videoFilter,
+      vP: this.videoPage > 1 ? String(this.videoPage) : null,
+      iF: this.imageFilter === 'all' ? null : this.imageFilter,
+      iP: this.imagePage > 1 ? String(this.imagePage) : null,
+    };
+    this.router.navigate([], {
+      relativeTo: this.route,
+      queryParams: qp,
+      queryParamsHandling: 'merge',
+      replaceUrl: true,
+    });
+  }
+
+  private restorePaginationFromUrl(): void {
+    const params = this.route.snapshot.queryParamMap;
+    const spF = params.get('spF');
+    const vF = params.get('vF');
+    const iF = params.get('iF');
+    if (spF) this.subpartFilter = spF;
+    if (vF) this.videoFilter = vF;
+    if (iF) this.imageFilter = iF;
+    // Pages get clamped after data loads — store the raw value here, the
+    // template's totalPages getters compute against current filteredX length.
+    const spP = +(params.get('spP') || 0);
+    const vP = +(params.get('vP') || 0);
+    const iP = +(params.get('iP') || 0);
+    if (spP > 0) this.subpartPage = spP;
+    if (vP > 0) this.videoPage = vP;
+    if (iP > 0) this.imagePage = iP;
   }
 
   getImageCountByStatus(status: string): number {
@@ -239,12 +302,16 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       next: (p) => {
         this.project = p;
         this.loadProjectTags(p.id);
-        // Auto-select subpart if query param present
+        // Auto-select subpart if query param present. selectSubpart resets
+        // filters/pages, so re-apply the URL-encoded values afterward and
+        // only then open the gate that writes state back to the URL.
         const subpartId = this.route.snapshot.queryParamMap.get('subpartId');
         if (subpartId && p.subparts?.length) {
           const sp = p.subparts.find(s => s.id === subpartId);
           if (sp) this.selectSubpart(sp);
         }
+        this.restorePaginationFromUrl();
+        this.urlSyncReady = true;
       },
       error: () => this.router.navigate(['/dashboard'])
     });
@@ -267,6 +334,7 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     } else {
       this.loadSubpartVideos(sp.id);
     }
+    this.syncUrlState();
   }
 
   loadSubpartVideos(subpartId: string): void {
@@ -275,6 +343,8 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       next: (videos) => {
         this.subpartVideos = videos;
         this.loadingVideos = false;
+        // Snap a restored page back into range if the list shrank.
+        this.videoPage = this.clampPage(this.videoPage, this.videoTotalPages);
       },
       error: () => {
         this.loadingVideos = false;
@@ -288,6 +358,7 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       next: (images) => {
         this.subpartImages = images;
         this.loadingImages = false;
+        this.imagePage = this.clampPage(this.imagePage, this.imageTotalPages);
       },
       error: () => {
         this.loadingImages = false;

@@ -185,17 +185,17 @@
 
     <!-- Subpart Pagination -->
     <div class="pagination-bar" *ngIf="subpartTotalPages > 1">
-      <button mat-icon-button [disabled]="subpartPage <= 1" (click)="subpartPage = 1">
+      <button mat-icon-button [disabled]="subpartPage <= 1" (click)="setSubpartPage(1)">
         <mat-icon>first_page</mat-icon>
       </button>
-      <button mat-icon-button [disabled]="subpartPage <= 1" (click)="subpartPage = subpartPage - 1">
+      <button mat-icon-button [disabled]="subpartPage <= 1" (click)="setSubpartPage(subpartPage - 1)">
         <mat-icon>chevron_left</mat-icon>
       </button>
       <span class="page-info">Page {{ subpartPage }} of {{ subpartTotalPages }}</span>
-      <button mat-icon-button [disabled]="subpartPage >= subpartTotalPages" (click)="subpartPage = subpartPage + 1">
+      <button mat-icon-button [disabled]="subpartPage >= subpartTotalPages" (click)="setSubpartPage(subpartPage + 1)">
         <mat-icon>chevron_right</mat-icon>
       </button>
-      <button mat-icon-button [disabled]="subpartPage >= subpartTotalPages" (click)="subpartPage = subpartTotalPages">
+      <button mat-icon-button [disabled]="subpartPage >= subpartTotalPages" (click)="setSubpartPage(subpartTotalPages)">
         <mat-icon>last_page</mat-icon>
       </button>
       <span class="page-size-label">{{ filteredSubparts.length }} total</span>
@@ -419,17 +419,17 @@
 
     <!-- Video Pagination -->
     <div class="pagination-bar" *ngIf="videoTotalPages > 1">
-      <button mat-icon-button [disabled]="videoPage <= 1" (click)="videoPage = 1">
+      <button mat-icon-button [disabled]="videoPage <= 1" (click)="setVideoPage(1)">
         <mat-icon>first_page</mat-icon>
       </button>
-      <button mat-icon-button [disabled]="videoPage <= 1" (click)="videoPage = videoPage - 1">
+      <button mat-icon-button [disabled]="videoPage <= 1" (click)="setVideoPage(videoPage - 1)">
         <mat-icon>chevron_left</mat-icon>
       </button>
       <span class="page-info">Page {{ videoPage }} of {{ videoTotalPages }}</span>
-      <button mat-icon-button [disabled]="videoPage >= videoTotalPages" (click)="videoPage = videoPage + 1">
+      <button mat-icon-button [disabled]="videoPage >= videoTotalPages" (click)="setVideoPage(videoPage + 1)">
         <mat-icon>chevron_right</mat-icon>
       </button>
-      <button mat-icon-button [disabled]="videoPage >= videoTotalPages" (click)="videoPage = videoTotalPages">
+      <button mat-icon-button [disabled]="videoPage >= videoTotalPages" (click)="setVideoPage(videoTotalPages)">
         <mat-icon>last_page</mat-icon>
       </button>
       <span class="page-size-label">{{ filteredVideos.length }} total</span>
@@ -653,17 +653,17 @@
 
     <!-- Image Pagination -->
     <div class="pagination-bar" *ngIf="imageTotalPages > 1">
-      <button mat-icon-button [disabled]="imagePage <= 1" (click)="imagePage = 1">
+      <button mat-icon-button [disabled]="imagePage <= 1" (click)="setImagePage(1)">
         <mat-icon>first_page</mat-icon>
       </button>
-      <button mat-icon-button [disabled]="imagePage <= 1" (click)="imagePage = imagePage - 1">
+      <button mat-icon-button [disabled]="imagePage <= 1" (click)="setImagePage(imagePage - 1)">
         <mat-icon>chevron_left</mat-icon>
       </button>
       <span class="page-info">Page {{ imagePage }} of {{ imageTotalPages }}</span>
-      <button mat-icon-button [disabled]="imagePage >= imageTotalPages" (click)="imagePage = imagePage + 1">
+      <button mat-icon-button [disabled]="imagePage >= imageTotalPages" (click)="setImagePage(imagePage + 1)">
         <mat-icon>chevron_right</mat-icon>
       </button>
-      <button mat-icon-button [disabled]="imagePage >= imageTotalPages" (click)="imagePage = imageTotalPages">
+      <button mat-icon-button [disabled]="imagePage >= imageTotalPages" (click)="setImagePage(imageTotalPages)">
         <mat-icon>last_page</mat-icon>
       </button>
       <span class="page-size-label">{{ filteredImages.length }} total</span>
