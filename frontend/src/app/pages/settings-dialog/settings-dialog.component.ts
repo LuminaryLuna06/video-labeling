@@ -103,10 +103,10 @@ export class SettingsDialogComponent implements OnInit {
       ...this.form,
       gemini_api_key: (this.form.gemini_api_key || '').trim(),
       gemini_model: (this.form.gemini_model || '').trim() || 'gemini-2.0-flash',
-      dam_server_url: '', // ignored by backend save below, but kept for type compatibility
+      dam_server_url: '', // empty so backend keeps its production value via `or get_dam_url()` fallback
     };
 
-    this.settingsService.saveAllSettings({ ...payload, dam_server_url: this.form.dam_server_url || '' }).subscribe({
+    this.settingsService.saveAllSettings(payload).subscribe({
       next: () => {
         // Re-assert local DAM URL after the backend sync writes its (shared) value.
         this.settingsService.save({ dam_server_url: localDamUrl });

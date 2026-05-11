@@ -35,7 +35,7 @@ export class DamService {
    * Resolve the DAM base URL. Reads from SettingsService (which is backed by localStorage).
    * Falls back to DEFAULT_DAM_URL if blank.
    */
-  getDamUrl(): string {
+  private getDamUrl(): string {
     const url = (this.settings.get().dam_server_url || '').trim();
     return (url || DEFAULT_DAM_URL).replace(/\/+$/, '');
   }
