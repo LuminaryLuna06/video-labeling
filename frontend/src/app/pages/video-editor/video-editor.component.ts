@@ -23,6 +23,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { GeminiService } from '../../core/services/gemini.service';
 import { SettingsService } from '../../core/services/settings.service';
 import { KnowledgeBaseService } from '../../core/services/knowledge-base.service';
+import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
@@ -189,7 +190,8 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     private settingsService: SettingsService,
     private kbService: KnowledgeBaseService,
     private dialog: MatDialog,
-    private snackBar: MatSnackBar
+    private snackBar: MatSnackBar,
+    private navHistory: NavigationHistoryService
   ) {}
 
   /**
@@ -2059,14 +2061,16 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   goBack(): void {
+    // Pop the browser history entry so the project page's pagination /
+    // filter query params come back exactly as they were. Falls back to
+    // an explicit navigation only when this tab has no in-app history
+    // (e.g. user opened a deep link to the editor).
     if (this.video?.project_id) {
       const queryParams: any = {};
-      if (this.video.subpart_id) {
-        queryParams.subpartId = this.video.subpart_id;
-      }
-      this.router.navigate(['/projects', this.video.project_id], { queryParams });
+      if (this.video.subpart_id) queryParams.subpartId = this.video.subpart_id;
+      this.navHistory.back(['/projects', this.video.project_id], { queryParams });
     } else {
-      this.router.navigate(['/dashboard']);
+      this.navHistory.back(['/dashboard']);
     }
   }
 
