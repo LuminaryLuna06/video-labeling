@@ -1,10 +1,8 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { map } from 'rxjs/operators';
 import { VideoItem, VideoSegment, ObjectRegion, SegmentationResponse, Caption, Category } from '../models';
 import { DamService } from './dam.service';
-import { normalizeVideo, normalizeSimilarImage, normalizeFrameSimilarImages } from '../utils/media-url';
 
 @Injectable({ providedIn: 'root' })
 export class VideoService {
@@ -23,21 +21,19 @@ export class VideoService {
     if (subpartId) formData.append('subpart_id', subpartId);
     if (duration) formData.append('duration', duration.toString());
     if (thumbnail) formData.append('thumbnail', thumbnail, 'thumb.jpg');
-    return this.http.post<VideoItem>(`${this.API}/upload`, formData).pipe(map(normalizeVideo));
+    return this.http.post(`${this.API}/upload`, formData);
   }
 
   getProjectVideos(projectId: string): Observable<VideoItem[]> {
-    return this.http.get<VideoItem[]>(`${this.API}/project/${projectId}`)
-      .pipe(map(videos => videos.map(normalizeVideo)));
+    return this.http.get<VideoItem[]>(`${this.API}/project/${projectId}`);
   }
 
   getSubpartVideos(subpartId: string): Observable<VideoItem[]> {
-    return this.http.get<VideoItem[]>(`${this.API}/subpart/${subpartId}`)
-      .pipe(map(videos => videos.map(normalizeVideo)));
+    return this.http.get<VideoItem[]>(`${this.API}/subpart/${subpartId}`);
   }
 
   getVideo(videoId: string): Observable<VideoItem> {
-    return this.http.get<VideoItem>(`${this.API}/${videoId}`).pipe(map(normalizeVideo));
+    return this.http.get<VideoItem>(`${this.API}/${videoId}`);
   }
 
   updateVideo(videoId: string, data: Partial<VideoItem>): Observable<any> {
@@ -193,8 +189,7 @@ export class VideoService {
     prompt?: string;
     use_gemini?: boolean;
   }): Observable<VideoProcessingResult> {
-    return this.http.post<VideoProcessingResult>(`${this.API}/${videoId}/process`, options || {})
-      .pipe(map(normalizeProcessingResult));
+    return this.http.post<VideoProcessingResult>(`${this.API}/${videoId}/process`, options || {});
   }
 
   /**
@@ -210,8 +205,7 @@ export class VideoService {
     if (options?.num_frames !== undefined) formData.append('num_frames', String(options.num_frames));
     if (options?.prompt) formData.append('prompt', options.prompt);
     if (options?.use_gemini !== undefined) formData.append('use_gemini', String(options.use_gemini));
-    return this.http.post<VideoProcessingResult>(`${this.API}/demo/process`, formData)
-      .pipe(map(normalizeProcessingResult));
+    return this.http.post<VideoProcessingResult>(`${this.API}/demo/process`, formData);
   }
 
   /**
@@ -228,19 +222,8 @@ export class VideoService {
     return this.http.post<VideoSearchResult>(`${this.API}/search`, {
       query_image: queryImage,
       top_k: topK
-    }).pipe(map(res => ({
-      ...res,
-      results: res.results.map(r => ({ ...r, video: normalizeVideo(r.video) })),
-    })));
+    });
   }
-}
-
-function normalizeProcessingResult(res: VideoProcessingResult): VideoProcessingResult {
-  return {
-    ...res,
-    similar_images: res.similar_images?.map(normalizeSimilarImage),
-    frame_similar_images: res.frame_similar_images?.map(normalizeFrameSimilarImages),
-  };
 }
 
 // ---- Types for AI Processing ----
