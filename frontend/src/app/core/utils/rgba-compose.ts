@@ -1,4 +1,10 @@
 /**
+ * Max longest-side (px) for frames sent to DAM. DAM-3B's vision backbone
+ * runs at 384x384, so anything beyond ~2x that is wasted bandwidth.
+ */
+const MAX_DIM_PX = 768;
+
+/**
  * Load a base64 image data URL (or raw base64 PNG/JPEG) into an HTMLImageElement.
  * Accepts both "data:image/png;base64,xxx" and raw "xxx" forms.
  */
@@ -12,6 +18,17 @@ function loadImage(b64: string): Promise<HTMLImageElement> {
 }
 
 /**
+ * Scale (w, h) so the longest side is at most `maxSide`, preserving aspect ratio.
+ * Never upscales.
+ */
+function fitInside(w: number, h: number, maxSide: number): { w: number; h: number } {
+  const longest = Math.max(w, h);
+  if (longest <= maxSide) return { w, h };
+  const scale = maxSide / longest;
+  return { w: Math.round(w * scale), h: Math.round(h * scale) };
+}
+
+/**
  * Compose an RGBA PNG where alpha = mask grayscale.
  * Port of backend `_make_rgba_image` (PIL → Canvas).
  * Mask is resized to frame size with nearest-neighbor to match PIL's Image.NEAREST.
@@ -22,15 +39,14 @@ function loadImage(b64: string): Promise<HTMLImageElement> {
 export async function composeRgba(frameB64: string, maskB64: string): Promise<string> {
   const [frame, mask] = await Promise.all([loadImage(frameB64), loadImage(maskB64)]);
 
-  const w = frame.naturalWidth;
-  const h = frame.naturalHeight;
+  const { w, h } = fitInside(frame.naturalWidth, frame.naturalHeight, MAX_DIM_PX);
 
   const frameCanvas = document.createElement('canvas');
   frameCanvas.width = w;
   frameCanvas.height = h;
   const frameCtx = frameCanvas.getContext('2d');
   if (!frameCtx) throw new Error('Canvas 2D context unavailable');
-  frameCtx.drawImage(frame, 0, 0);
+  frameCtx.drawImage(frame, 0, 0, w, h);
   const frameData = frameCtx.getImageData(0, 0, w, h);
 
   const maskCanvas = document.createElement('canvas');
@@ -38,7 +54,7 @@ export async function composeRgba(frameB64: string, maskB64: string): Promise<st
   maskCanvas.height = h;
   const maskCtx = maskCanvas.getContext('2d');
   if (!maskCtx) throw new Error('Canvas 2D context unavailable');
-  maskCtx.imageSmoothingEnabled = false; // mimic PIL Image.NEAREST
+  maskCtx.imageSmoothingEnabled = false; // mimic PIL Image.NEAREST — keep mask edge crisp
   maskCtx.drawImage(mask, 0, 0, w, h);
   const maskData = maskCtx.getImageData(0, 0, w, h);
 
@@ -59,15 +75,14 @@ export async function composeRgba(frameB64: string, maskB64: string): Promise<st
  */
 export async function composeFullMaskRgba(frameB64: string): Promise<string> {
   const frame = await loadImage(frameB64);
-  const w = frame.naturalWidth;
-  const h = frame.naturalHeight;
+  const { w, h } = fitInside(frame.naturalWidth, frame.naturalHeight, MAX_DIM_PX);
 
   const canvas = document.createElement('canvas');
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D context unavailable');
-  ctx.drawImage(frame, 0, 0);
+  ctx.drawImage(frame, 0, 0, w, h);
   // drawImage already produces alpha=255 for opaque sources; this is explicit and safe.
   const data = ctx.getImageData(0, 0, w, h);
   for (let i = 3; i < data.data.length; i += 4) {
