@@ -1,10 +1,4 @@
 /**
- * Max longest-side (px) for frames sent to DAM. DAM-3B's vision backbone
- * runs at 384x384, so anything beyond ~2x that is wasted bandwidth.
- */
-const MAX_DIM_PX = 768;
-
-/**
  * Load a base64 image data URL (or raw base64 PNG/JPEG) into an HTMLImageElement.
  * Accepts both "data:image/png;base64,xxx" and raw "xxx" forms.
  */
@@ -18,13 +12,15 @@ function loadImage(b64: string): Promise<HTMLImageElement> {
 }
 
 /**
- * Scale (w, h) so the longest side is at most `maxSide`, preserving aspect ratio.
- * Never upscales.
+ * Scale (w, h) so the SHORT edge equals `target`, preserving aspect ratio.
+ * Never upscales: if the short edge is already smaller than the target, the
+ * image is returned as-is. This ensures the image stays at least as large as
+ * DAM's 384x384 input on both dimensions when target >= 384.
  */
-function fitInside(w: number, h: number, maxSide: number): { w: number; h: number } {
-  const longest = Math.max(w, h);
-  if (longest <= maxSide) return { w, h };
-  const scale = maxSide / longest;
+function fitToShortEdge(w: number, h: number, target: number): { w: number; h: number } {
+  const shortest = Math.min(w, h);
+  if (shortest <= target) return { w, h };
+  const scale = target / shortest;
   return { w: Math.round(w * scale), h: Math.round(h * scale) };
 }
 
@@ -36,10 +32,16 @@ function fitInside(w: number, h: number, maxSide: number): { w: number; h: numbe
  * Browser-drawn masks are grayscale PNGs (R = G = B); we read the R channel as alpha,
  * which matches PIL's `.convert('L')` luminance on grayscale input.
  */
-export async function composeRgba(frameB64: string, maskB64: string): Promise<string> {
+export async function composeRgba(
+  frameB64: string,
+  maskB64: string,
+  maxSide?: number | null
+): Promise<string> {
   const [frame, mask] = await Promise.all([loadImage(frameB64), loadImage(maskB64)]);
 
-  const { w, h } = fitInside(frame.naturalWidth, frame.naturalHeight, MAX_DIM_PX);
+  const { w, h } = maxSide && maxSide > 0
+    ? fitToShortEdge(frame.naturalWidth, frame.naturalHeight, maxSide)
+    : { w: frame.naturalWidth, h: frame.naturalHeight };
 
   const frameCanvas = document.createElement('canvas');
   frameCanvas.width = w;
@@ -73,9 +75,14 @@ export async function composeRgba(frameB64: string, maskB64: string): Promise<st
  * Compose an RGBA PNG with alpha = 255 everywhere (entire frame visible).
  * Port of backend `_make_full_mask_rgba`. Used for contextual captions.
  */
-export async function composeFullMaskRgba(frameB64: string): Promise<string> {
+export async function composeFullMaskRgba(
+  frameB64: string,
+  maxSide?: number | null
+): Promise<string> {
   const frame = await loadImage(frameB64);
-  const { w, h } = fitInside(frame.naturalWidth, frame.naturalHeight, MAX_DIM_PX);
+  const { w, h } = maxSide && maxSide > 0
+    ? fitToShortEdge(frame.naturalWidth, frame.naturalHeight, maxSide)
+    : { w: frame.naturalWidth, h: frame.naturalHeight };
 
   const canvas = document.createElement('canvas');
   canvas.width = w;

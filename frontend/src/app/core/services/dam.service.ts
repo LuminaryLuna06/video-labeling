@@ -96,10 +96,11 @@ export class DamService {
     }
 
     const padded = padOrTrimFrames(frames, 8);
+    const maxSide = this.settings.getDamMaxImageSide();
     const composer =
       captionType === 'visual'
-        ? (f: string) => composeRgba(f, maskImage)
-        : (f: string) => composeFullMaskRgba(f);
+        ? (f: string) => composeRgba(f, maskImage, maxSide)
+        : (f: string) => composeFullMaskRgba(f, maxSide);
     const prompt = captionType === 'visual' ? this.VISUAL_PROMPT : this.CONTEXTUAL_PROMPT;
 
     return from(Promise.all(padded.map(composer))).pipe(

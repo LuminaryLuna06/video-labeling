@@ -26,6 +26,18 @@
             {{ connectionMessage }}
           </span>
         </div>
+
+        <mat-form-field appearance="outline" class="full-width">
+          <mat-label>Image short side (sent to DAM)</mat-label>
+          <mat-select [(ngModel)]="damMaxImageSide">
+            <mat-option value="384">384 px (DAM native)</mat-option>
+            <mat-option value="512">512 px (default)</mat-option>
+            <mat-option value="768">768 px</mat-option>
+            <mat-option value="1024">1024 px</mat-option>
+            <mat-option value="native">Native (no resize)</mat-option>
+          </mat-select>
+          <mat-icon matPrefix>photo_size_select_large</mat-icon>
+        </mat-form-field>
       </div>
     </mat-tab>
 
