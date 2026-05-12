@@ -96,6 +96,11 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   showRejectDialog = false;
   rejectingVideo: VideoItem | null = null;
   rejectComment = '';
+
+  // Rename Dialog
+  renamingVideo: VideoItem | null = null;
+  renameValue = '';
+
   selectedReviewer = '';
   selectedReviewers: string[] = [];
   editSubpartReviewer = '';
@@ -694,6 +699,37 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
           this.loadProject(this.project!.id);
         }
         this.snackBar.open('Video deleted', 'Close', { duration: 2000, panelClass: 'snack-success' });
+      }
+    });
+  }
+
+  openRenameDialog(video: VideoItem): void {
+    this.renamingVideo = video;
+    this.renameValue = video.original_name;
+  }
+
+  closeRenameDialog(): void {
+    this.renamingVideo = null;
+    this.renameValue = '';
+  }
+
+  saveRename(): void {
+    if (!this.renamingVideo) return;
+    const name = this.renameValue.trim();
+    if (!name || name === this.renamingVideo.original_name) return;
+    const video = this.renamingVideo;
+    this.videoService.updateVideo(video.id, { original_name: name }).subscribe({
+      next: () => {
+        video.original_name = name;
+        this.snackBar.open('Video renamed', 'Close', { duration: 2000, panelClass: 'snack-success' });
+        this.closeRenameDialog();
+        if (this.selectedSubpart) {
+          this.loadSubpartVideos(this.selectedSubpart.id);
+        }
+      },
+      error: (err) => {
+        const msg = err?.error?.error || 'Failed to rename video';
+        this.snackBar.open(msg, 'Close', { duration: 3000, panelClass: 'snack-error' });
       }
     });
   }
