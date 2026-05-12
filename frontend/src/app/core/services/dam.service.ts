@@ -25,7 +25,7 @@ export class DamService {
 
   private readonly VISUAL_PROMPT =
     '\nDescribe the masked region in detail. Focus on the visual appearance, ' +
-    'shape, color, texture, and any distinguishing features of the object in the frame.';
+    'shape, color, texture, and any distinguishing features of the object across the video frames.';
 
   private readonly CONTEXTUAL_PROMPT =
     '\nDescribe the overall scene in this video segment. Focus on the context, ' +
@@ -80,10 +80,8 @@ export class DamService {
    * Generate a visual or contextual caption for a region.
    * Mirrors backend /api/annotations/generate-caption.
    *
-   * Visual: single image (the frame the mask was drawn on) with the object
-   *   mask as alpha. The mask is single-frame anyway, so sending more frames
-   *   only adds bandwidth and risks mask misalignment on moving objects.
-   * Contextual: 8 evenly-spaced frames with alpha=255 (whole-scene description).
+   * Visual: every frame gets the object mask as alpha.
+   * Contextual: every frame gets a full-white mask (entire frame is the region).
    */
   generateCaption(
     frames: string[],
@@ -97,17 +95,16 @@ export class DamService {
       return throwError(() => new Error('mask_image is required for visual caption'));
     }
 
-    if (captionType === 'visual') {
-      return from(composeRgba(frames[0], maskImage)).pipe(
-        switchMap((rgba) => this.callDamChat([rgba], this.VISUAL_PROMPT)),
-        map((caption) => ({ caption, caption_type: 'visual' as const }))
-      );
-    }
-
     const padded = padOrTrimFrames(frames, 8);
-    return from(Promise.all(padded.map((f) => composeFullMaskRgba(f)))).pipe(
-      switchMap((rgbaList) => this.callDamChat(rgbaList, this.CONTEXTUAL_PROMPT)),
-      map((caption) => ({ caption, caption_type: 'contextual' as const }))
+    const composer =
+      captionType === 'visual'
+        ? (f: string) => composeRgba(f, maskImage)
+        : (f: string) => composeFullMaskRgba(f);
+    const prompt = captionType === 'visual' ? this.VISUAL_PROMPT : this.CONTEXTUAL_PROMPT;
+
+    return from(Promise.all(padded.map(composer))).pipe(
+      switchMap((rgbaList) => this.callDamChat(rgbaList, prompt)),
+      map((caption) => ({ caption, caption_type: captionType }))
     );
   }
 
