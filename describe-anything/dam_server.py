@@ -32,7 +32,7 @@ import requests
 import torch
 import torch.nn.functional as F
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image as PILImage
@@ -276,6 +276,29 @@ app.add_middleware(
 )
 
 
+def _fmt_size(n: Optional[int]) -> str:
+    if n is None:
+        return "?"
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / (1024 * 1024):.2f} MB"
+
+
+@app.middleware("http")
+async def log_request_size(request: Request, call_next):
+    raw_len = request.headers.get("content-length")
+    cl = int(raw_len) if raw_len and raw_len.isdigit() else None
+    t0 = time.time()
+    response = await call_next(request)
+    elapsed = time.time() - t0
+    print(f"[req] {request.method} {request.url.path} "
+          f"content-length={_fmt_size(cl)} status={response.status_code} "
+          f"elapsed={elapsed:.2f}s")
+    return response
+
+
 async def convert_generator_to_async(gen: Generator) -> AsyncGenerator:
     for item in gen:
         yield item
@@ -299,6 +322,7 @@ async def chat_completions(request: ChatCompletionRequest):
         messages = request.messages
 
         images = []
+        image_wire_sizes: List[int] = []  # bytes of each image_url string (wire payload per frame)
         query = ""
 
         for message in messages:
@@ -310,6 +334,7 @@ async def chat_completions(request: ChatCompletionRequest):
                         if content.type == "text":
                             query += content.text
                         elif content.type == "image_url":
+                            image_wire_sizes.append(len(content.image_url.url))
                             image = load_image(content.image_url.url)
                             assert image.mode == "RGBA", f"Image mode is {image.mode}, but it should be RGBA"
                             images.append(image)
@@ -320,6 +345,12 @@ async def chat_completions(request: ChatCompletionRequest):
 
         if len(images) == 0:
             raise ValueError("No image with mask found in input messages.")
+
+        if image_wire_sizes:
+            total = sum(image_wire_sizes)
+            per_image = ", ".join(_fmt_size(n) for n in image_wire_sizes)
+            print(f"[chat] {len(image_wire_sizes)} images: [{per_image}] total={_fmt_size(total)} "
+                  f"first_image_size={images[0].size}")
 
         # Remove the prefix of the query if it exists. We detect the prefix and add it back on our own.
         query = query.strip()

@@ -910,6 +910,11 @@ def update_video(video_id):
     if 'duration' in data:
         update_fields['duration'] = float(data['duration'])
         content_changed = True
+    if 'original_name' in data:
+        name = (data.get('original_name') or '').strip()
+        if not name:
+            return jsonify({'error': 'original_name must not be empty'}), 400
+        update_fields['original_name'] = name
     if 'status' in data:
         update_fields['status'] = data['status']
     if 'current_step' in data:

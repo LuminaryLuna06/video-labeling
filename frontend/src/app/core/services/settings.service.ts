@@ -13,6 +13,8 @@ export interface AppSettings {
 
 const STORAGE_KEY = 'annotator_settings';
 const DAM_URL_STORAGE_KEY = 'dam_server_url_local';
+const DAM_MAX_DIM_STORAGE_KEY = 'dam_max_image_side_local';
+const DAM_MAX_DIM_DEFAULT = 512;
 
 const DEFAULT_SETTINGS: AppSettings = {
   gemini_api_key: '',
@@ -88,13 +90,33 @@ export class SettingsService {
   }
 
   // ---- Independent DAM Server URL Logic ----
-  
+
   getLocalDamUrl(): string {
     return localStorage.getItem(DAM_URL_STORAGE_KEY) || '';
   }
 
   saveLocalDamUrl(url: string): void {
     localStorage.setItem(DAM_URL_STORAGE_KEY, url);
+  }
+
+  /**
+   * Max longest-side (px) for frames sent to DAM. Null = native (no downscale).
+   * Default: 768. Stored per-browser in localStorage.
+   */
+  getDamMaxImageSide(): number | null {
+    const raw = localStorage.getItem(DAM_MAX_DIM_STORAGE_KEY);
+    if (raw === null) return DAM_MAX_DIM_DEFAULT;
+    if (raw === '' || raw === '0') return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n > 0 ? n : DAM_MAX_DIM_DEFAULT;
+  }
+
+  saveDamMaxImageSide(value: number | null): void {
+    if (value === null || value === 0) {
+      localStorage.setItem(DAM_MAX_DIM_STORAGE_KEY, '0');
+    } else {
+      localStorage.setItem(DAM_MAX_DIM_STORAGE_KEY, String(value));
+    }
   }
 
   // Backend Sync (If needed for shared config, but local takes precedence)

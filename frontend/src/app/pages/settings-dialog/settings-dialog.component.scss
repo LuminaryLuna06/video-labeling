@@ -31,6 +31,7 @@ mat-dialog-content {
 }
 .server-actions {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 16px;
 }
 .server-actions button {
   display: flex; align-items: center; gap: 6px;

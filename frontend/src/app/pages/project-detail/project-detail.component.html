@@ -359,6 +359,10 @@
                       matTooltip="Edit Tags">
                 <mat-icon>label</mat-icon>
               </button>
+              <button mat-icon-button (click)="openRenameDialog(video); $event.stopPropagation()"
+                      matTooltip="Rename video">
+                <mat-icon>edit</mat-icon>
+              </button>
               <button mat-icon-button (click)="deleteVideo(video); $event.stopPropagation()"
                       matTooltip="Delete video">
                 <mat-icon>delete</mat-icon>
@@ -841,6 +845,26 @@
     <div class="dialog-actions">
       <button mat-button (click)="showVideoTagDialog = false">Cancel</button>
       <button mat-raised-button class="primary-btn" (click)="saveVideoTags()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Video Rename Dialog -->
+<div class="dialog-overlay" *ngIf="renamingVideo" (click)="closeRenameDialog()">
+  <div class="dialog-card" (click)="$event.stopPropagation()">
+    <h2>Rename Video</h2>
+    <p class="dialog-subtitle">Current: {{ renamingVideo?.original_name }}</p>
+    <mat-form-field appearance="outline">
+      <mat-label>New name</mat-label>
+      <input matInput [(ngModel)]="renameValue" (keyup.enter)="saveRename()" cdkFocusInitial>
+    </mat-form-field>
+    <div class="dialog-actions">
+      <button mat-button (click)="closeRenameDialog()">Cancel</button>
+      <button mat-raised-button class="primary-btn"
+              [disabled]="!renameValue.trim() || renameValue.trim() === renamingVideo?.original_name"
+              (click)="saveRename()">
+        Save
+      </button>
     </div>
   </div>
 </div>

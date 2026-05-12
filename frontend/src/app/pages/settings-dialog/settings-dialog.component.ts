@@ -28,6 +28,8 @@ import { DamService } from '../../core/services/dam.service';
 export class SettingsDialogComponent implements OnInit {
   form: AppSettings;
   damServerUrl = '';
+  // null = "Native" (no downscale). Bound as string in the <mat-select>.
+  damMaxImageSide: string = '512';
   showApiKey = false;
   testingConnection = false;
   connectionStatus: 'ok' | 'error' | '' = '';
@@ -41,6 +43,8 @@ export class SettingsDialogComponent implements OnInit {
   ) {
     this.form = { ...this.settingsService.get() };
     this.damServerUrl = this.settingsService.getLocalDamUrl() || 'http://localhost:8000';
+    const stored = this.settingsService.getDamMaxImageSide();
+    this.damMaxImageSide = stored === null ? 'native' : String(stored);
   }
 
   ngOnInit(): void {
@@ -92,6 +96,10 @@ export class SettingsDialogComponent implements OnInit {
 
     // Persist DAM URL to its dedicated local storage key
     this.settingsService.saveLocalDamUrl(localDamUrl);
+
+    // Persist max image side (local-only).
+    const maxSide = this.damMaxImageSide === 'native' ? null : parseInt(this.damMaxImageSide, 10);
+    this.settingsService.saveDamMaxImageSide(Number.isFinite(maxSide as number) ? (maxSide as number) : null);
 
     // Build a backend payload for the shared settings
     const payload: AppSettings = {
