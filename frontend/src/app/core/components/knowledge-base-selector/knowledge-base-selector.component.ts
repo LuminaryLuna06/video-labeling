@@ -1,4 +1,4 @@
-import { Component, EventEmitter, Input, OnInit, Output, forwardRef } from '@angular/core';
+import { Component, ElementRef, EventEmitter, Input, OnInit, Output, ViewChild, forwardRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule, NG_VALUE_ACCESSOR, ControlValueAccessor } from '@angular/forms';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -10,6 +10,11 @@ import { MatAutocompleteModule } from '@angular/material/autocomplete';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { KnowledgeBaseService, KBNode, KBType } from '../../services/knowledge-base.service';
+
+interface FlatTreeNode extends KBNode {
+  depth: number;
+  hasChildren: boolean;
+}
 
 @Component({
   selector: 'app-knowledge-base-selector',
@@ -34,10 +39,13 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
   @Input() placeholder = 'Search and select knowledge...';
   @Input() multiple = true;
   @Input() showQuickAdd = true;
-  
+
+  @ViewChild('searchInput') searchInputRef!: ElementRef<HTMLInputElement>;
+
   @Output() selectionChange = new EventEmitter<KBNode[]>();
 
   allNodes: KBNode[] = [];
+  treeNodes: FlatTreeNode[] = [];
   filteredNodes: KBNode[] = [];
   selectedNodes: KBNode[] = [];
   searchQuery = '';
@@ -48,6 +56,8 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
   showQuickAddForm = false;
   quickAddName = '';
   quickAddType = 'concept';
+
+  private pendingIds: string[] | null = null;
 
   kbTypes: KBType[] = [
     { value: 'action', label: 'Action', icon: 'directions_run', color: '#10b981' },
@@ -71,13 +81,18 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
 
   loadNodes(): void {
     this.loading = true;
-    this.kbService.getAllNodes().subscribe({
-      next: (nodes) => {
-        this.allNodes = nodes;
-        this.filteredNodes = nodes;
+    this.kbService.getTree().subscribe({
+      next: (tree) => {
+        this.treeNodes = this.flattenTree(tree || [], 0);
+        this.allNodes = this.treeNodes;
+        this.filteredNodes = [];
         this.loading = false;
-        // Restore selected nodes from IDs
-        this.updateSelectedNodesFromValue();
+        if (this.pendingIds !== null) {
+          this.selectedNodes = this.allNodes.filter(n => this.pendingIds!.includes(n.id));
+          this.pendingIds = null;
+        } else {
+          this.updateSelectedNodesFromValue();
+        }
       },
       error: () => {
         this.loading = false;
@@ -85,10 +100,21 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
     });
   }
 
+  private flattenTree(nodes: KBNode[], depth: number): FlatTreeNode[] {
+    const result: FlatTreeNode[] = [];
+    for (const node of nodes) {
+      result.push({ ...node, depth, hasChildren: !!(node.children?.length) });
+      if (node.children?.length) {
+        result.push(...this.flattenTree(node.children, depth + 1));
+      }
+    }
+    return result;
+  }
+
   filterNodes(): void {
     const query = this.searchQuery.toLowerCase().trim();
     if (!query) {
-      this.filteredNodes = this.allNodes;
+      this.filteredNodes = [];
       return;
     }
     this.filteredNodes = this.allNodes.filter(node =>
@@ -162,6 +188,7 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
   openDropdown(): void {
     this.showDropdown = true;
     this.filterNodes();
+    setTimeout(() => this.searchInputRef?.nativeElement?.focus(), 0);
   }
 
   // Helpers
@@ -175,17 +202,21 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
 
   // ControlValueAccessor implementation
   writeValue(value: any[]): void {
-    if (value && Array.isArray(value) && value.length > 0) {
-      // Check if value contains IDs (strings) or objects
-      if (typeof value[0] === 'string') {
-        this.updateSelectedNodesFromIds(value);
-      } else if (value[0].id) {
-        // Value contains objects, extract IDs
-        const ids = value.map((v: any) => v.id);
-        this.updateSelectedNodesFromIds(ids);
-      }
+    if (!value || !Array.isArray(value) || value.length === 0) {
+      this.selectedNodes = [];
+      this.pendingIds = null;
+      return;
     }
-    // Don't reset selectedNodes if value is empty - it might be an initial empty binding
+
+    const ids = typeof value[0] === 'string' ? value : value.map((v: any) => v.id);
+
+    if (this.allNodes.length > 0) {
+      this.selectedNodes = this.allNodes.filter(n => ids.includes(n.id));
+      this.pendingIds = null;
+    } else {
+      // Nodes not loaded yet — defer resolution until loadNodes() completes
+      this.pendingIds = ids;
+    }
   }
 
   registerOnChange(fn: (value: string[]) => void): void {
@@ -197,9 +228,7 @@ export class KnowledgeBaseSelectorComponent implements OnInit, ControlValueAcces
   }
 
   private updateSelectedNodesFromIds(ids: string[]): void {
-    if (this.allNodes.length > 0) {
-      this.selectedNodes = this.allNodes.filter(node => ids.includes(node.id));
-    }
+    this.selectedNodes = this.allNodes.filter(node => ids.includes(node.id));
   }
 
   private updateSelectedNodesFromValue(): void {

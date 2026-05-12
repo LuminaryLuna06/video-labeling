@@ -6,12 +6,12 @@
     <!-- Server Tab -->
     <mat-tab label="Server">
       <div class="settings-section">
-        <p class="section-desc">Configure the DAM (Describe Anything Model) + SAM2 server for AI segmentation and auto-captioning.</p>
+        <p class="section-desc">Configure the DAM (Describe Anything Model) + SAM2 server for AI segmentation and auto-captioning. <strong>Stored in this browser only</strong> — does not affect other users.</p>
 
         <mat-form-field appearance="outline" class="full-width">
           <mat-label>DAM Server URL</mat-label>
           <input matInput [(ngModel)]="damServerUrl"
-                 placeholder="http://192.168.88.31:8688">
+                 placeholder="http://localhost:8000">
           <mat-icon matPrefix>dns</mat-icon>
         </mat-form-field>
 

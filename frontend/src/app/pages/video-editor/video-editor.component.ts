@@ -23,6 +23,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { GeminiService } from '../../core/services/gemini.service';
 import { SettingsService } from '../../core/services/settings.service';
 import { KnowledgeBaseService } from '../../core/services/knowledge-base.service';
+import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
@@ -48,6 +49,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('frameCanvas') frameCanvasRef!: ElementRef<HTMLCanvasElement>;
   @ViewChild('drawCanvas') drawCanvasRef!: ElementRef<HTMLCanvasElement>;
   @ViewChild('maskCanvas') maskCanvasRef!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('canvasContainer') canvasContainerRef?: ElementRef<HTMLDivElement>;
   @ViewChild('captionCanvas') captionCanvasRef!: ElementRef<HTMLCanvasElement>;
   @ViewChild('segmentPreviewVideo') segmentPreviewVideoRef!: ElementRef<HTMLVideoElement>;
 
@@ -101,6 +103,12 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   private panOriginX = 0;
   private panOriginY = 0;
   spaceHeld = false;
+
+  // Canvas wrapper letterbox sizing (Step 2)
+  wrapperWidth = 0;
+  wrapperHeight = 0;
+  private frameAspect = 0; // canvas-buffer aspect ratio: w / h
+  private canvasResizeObserver?: ResizeObserver;
 
   // Captions
   captionData: Caption = {
@@ -182,7 +190,8 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     private settingsService: SettingsService,
     private kbService: KnowledgeBaseService,
     private dialog: MatDialog,
-    private snackBar: MatSnackBar
+    private snackBar: MatSnackBar,
+    private navHistory: NavigationHistoryService
   ) {}
 
   /**
@@ -199,9 +208,26 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     this.loadVideo(videoId);
   }
 
-  ngAfterViewInit(): void {}
+  ngAfterViewInit(): void {
+    this.setupCanvasContainerObserver();
+  }
+
+  private observedCanvasContainer?: HTMLElement;
+  private setupCanvasContainerObserver(): void {
+    if (typeof ResizeObserver === 'undefined') return;
+    const el = this.canvasContainerRef?.nativeElement;
+    if (!el) return;
+    // Step 2 can be entered/left repeatedly; the *ngIf recreates the
+    // element each time, so retarget the observer when the element changes.
+    if (this.observedCanvasContainer === el) return;
+    this.canvasResizeObserver?.disconnect();
+    this.canvasResizeObserver = new ResizeObserver(() => this.updateWrapperSize());
+    this.canvasResizeObserver.observe(el);
+    this.observedCanvasContainer = el;
+  }
 
   ngOnDestroy(): void {
+    this.canvasResizeObserver?.disconnect();
     if (this.videoPlayerRef?.nativeElement) {
       this.videoPlayerRef.nativeElement.pause();
     }
@@ -262,6 +288,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   /** Run once after loadVideo or setStep to bootstrap the active step */
   private initCurrentStep(): void {
     if (this.currentStep === 2) {
+      setTimeout(() => this.setupCanvasContainerObserver(), 0);
       if (!this.selectedSegment && this.segments.length > 0) {
         this.selectedSegment = this.segments[0];
       }
@@ -460,6 +487,11 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       this.videoService.updateVideo(this.video.id, { current_step: step } as any).subscribe();
     }
     this.initCurrentStep();
+    if (step === 2) {
+      // The canvas container only exists in the DOM on Step 2 — observe it
+      // once it renders so resize / panel-resize recomputes the wrapper size.
+      setTimeout(() => this.setupCanvasContainerObserver(), 0);
+    }
   }
 
   // ============ Object Segmentation (Step 2) ============
@@ -513,8 +545,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     const drawCanvas = this.drawCanvasRef.nativeElement;
     const maskCanvas = this.maskCanvasRef?.nativeElement;
 
-    video.currentTime = this.frameTime;
-    video.onseeked = () => {
+    const drawFrame = () => {
       const w = 800;
       const h = Math.round((video.videoHeight / video.videoWidth) * w) || 450;
 
@@ -524,19 +555,59 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         maskCanvas.width = w;
         maskCanvas.height = h;
       }
+      this.frameAspect = w / h;
+      this.updateWrapperSize();
 
       const ctx = frameCanvas.getContext('2d')!;
       ctx.drawImage(video, 0, 0, w, h);
 
-      // Clear draw canvas
       const dCtx = drawCanvas.getContext('2d')!;
       dCtx.clearRect(0, 0, w, h);
       this.hasDrawing = false;
 
       if (onLoaded) onLoaded();
     };
-    video.load();
-    setTimeout(() => { video.currentTime = this.frameTime; }, 300);
+
+    const seekAndDraw = () => {
+      // If we're already at (or very near) the target time, the browser won't
+      // fire 'seeked' — draw immediately.
+      if (Math.abs(video.currentTime - this.frameTime) < 0.01) {
+        drawFrame();
+        return;
+      }
+      video.onseeked = () => {
+        video.onseeked = null;
+        drawFrame();
+      };
+      video.currentTime = this.frameTime;
+    };
+
+    // HAVE_METADATA = 1; currentTime is meaningful from here on.
+    if (video.readyState >= 1 && video.videoWidth > 0) {
+      seekAndDraw();
+    } else {
+      const onMeta = () => {
+        video.removeEventListener('loadedmetadata', onMeta);
+        seekAndDraw();
+      };
+      video.addEventListener('loadedmetadata', onMeta);
+    }
+  }
+
+  private updateWrapperSize(): void {
+    const el = this.canvasContainerRef?.nativeElement;
+    if (!el || !this.frameAspect) return;
+    const cw = el.clientWidth;
+    const ch = el.clientHeight;
+    if (cw === 0 || ch === 0) return;
+    const containerAspect = cw / ch;
+    if (containerAspect > this.frameAspect) {
+      this.wrapperHeight = ch;
+      this.wrapperWidth = Math.round(ch * this.frameAspect);
+    } else {
+      this.wrapperWidth = cw;
+      this.wrapperHeight = Math.round(cw / this.frameAspect);
+    }
   }
 
   // ---- Zoom & Pan ----
@@ -1990,14 +2061,16 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   goBack(): void {
+    // Pop the browser history entry so the project page's pagination /
+    // filter query params come back exactly as they were. Falls back to
+    // an explicit navigation only when this tab has no in-app history
+    // (e.g. user opened a deep link to the editor).
     if (this.video?.project_id) {
       const queryParams: any = {};
-      if (this.video.subpart_id) {
-        queryParams.subpartId = this.video.subpart_id;
-      }
-      this.router.navigate(['/projects', this.video.project_id], { queryParams });
+      if (this.video.subpart_id) queryParams.subpartId = this.video.subpart_id;
+      this.navHistory.back(['/projects', this.video.project_id], { queryParams });
     } else {
-      this.router.navigate(['/dashboard']);
+      this.navHistory.back(['/dashboard']);
     }
   }
 

@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { VideoItem, VideoSegment, ObjectRegion, SegmentationResponse, Caption, Category } from '../models';
+import { DamService } from './dam.service';
 
 @Injectable({ providedIn: 'root' })
 export class VideoService {
@@ -10,7 +11,7 @@ export class VideoService {
   private readonly ANNOTATIONS_API = '/api/annotations';
   private readonly CATEGORIES_API = '/api/categories';
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private dam: DamService) {}
 
   // ---- Videos ----
   uploadVideo(projectId: string, file: File, subpartId?: string, duration?: number, thumbnail?: Blob): Observable<any> {
@@ -82,10 +83,7 @@ export class VideoService {
   }
 
   segmentObject(brushMask: string, frameImage?: string): Observable<SegmentationResponse> {
-    return this.http.post<SegmentationResponse>(`${this.SEGMENTS_API}/segment-object`, {
-      brush_mask: brushMask,
-      frame_image: frameImage
-    });
+    return this.dam.segmentObject(brushMask, frameImage);
   }
 
   // ---- Categories ----
@@ -154,18 +152,11 @@ export class VideoService {
 
   // ---- DAM Auto-Caption (Video: 8 frames) ----
   generateCaption(frames: string[], maskImage: string, captionType: 'visual' | 'contextual'): Observable<{ caption: string; caption_type: string }> {
-    return this.http.post<{ caption: string; caption_type: string }>(`${this.ANNOTATIONS_API}/generate-caption`, {
-      frames,
-      mask_image: maskImage,
-      caption_type: captionType
-    });
+    return this.dam.generateCaption(frames, maskImage, captionType);
   }
 
   generateCaptionBatch(frames: string[], maskImage: string): Observable<{ visual_caption: string; contextual_caption: string; warnings?: string[] }> {
-    return this.http.post<{ visual_caption: string; contextual_caption: string; warnings?: string[] }>(`${this.ANNOTATIONS_API}/generate-caption-batch`, {
-      frames,
-      mask_image: maskImage
-    });
+    return this.dam.generateCaptionBatch(frames, maskImage);
   }
 
   // ---- Review ----

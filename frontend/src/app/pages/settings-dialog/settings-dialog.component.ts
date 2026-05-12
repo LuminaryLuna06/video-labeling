@@ -11,6 +11,7 @@ import { MatTabsModule } from '@angular/material/tabs';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { SettingsService, AppSettings } from '../../core/services/settings.service';
+import { DamService } from '../../core/services/dam.service';
 
 @Component({
   selector: 'app-settings-dialog',
@@ -35,26 +36,29 @@ export class SettingsDialogComponent implements OnInit {
   constructor(
     public dialogRef: MatDialogRef<SettingsDialogComponent>,
     private settingsService: SettingsService,
+    private dam: DamService,
     private snackBar: MatSnackBar
   ) {
     this.form = { ...this.settingsService.get() };
+    this.damServerUrl = this.settingsService.getLocalDamUrl() || 'http://localhost:8000';
   }
 
   ngOnInit(): void {
-    // Load all settings from backend so they persist across browsers.
+    // Sync non-DAM settings (Gemini, prompts, timezone) from backend so they
+    // persist across browsers. DAM URL stays local-only.
     this.settingsService.syncAllFromBackend().subscribe({
       next: (remote) => {
         this.form = { ...remote };
-        this.damServerUrl = remote.dam_server_url || '';
       },
       error: () => {
-        this.damServerUrl = this.form.dam_server_url || '';
+        // Backend unreachable: keep the local form as-is.
       }
     });
   }
 
   testConnection(): void {
-    if (!this.damServerUrl.trim()) {
+    const url = this.damServerUrl.trim();
+    if (!url) {
       this.connectionStatus = 'error';
       this.connectionMessage = 'Please enter a URL';
       return;
@@ -63,7 +67,7 @@ export class SettingsDialogComponent implements OnInit {
     this.connectionStatus = '';
     this.connectionMessage = '';
 
-    this.settingsService.testDamConnection(this.damServerUrl.trim()).subscribe({
+    this.dam.testConnection(url).subscribe({
       next: (res) => {
         this.testingConnection = false;
         this.connectionStatus = 'ok';
@@ -72,7 +76,7 @@ export class SettingsDialogComponent implements OnInit {
       error: (err) => {
         this.testingConnection = false;
         this.connectionStatus = 'error';
-        this.connectionMessage = err.error?.message || 'Connection failed';
+        this.connectionMessage = err?.message || 'Connection failed';
       }
     });
   }
@@ -84,11 +88,16 @@ export class SettingsDialogComponent implements OnInit {
   }
 
   save(): void {
+    const localDamUrl = this.damServerUrl.trim() || 'http://localhost:8000';
+
+    // Persist DAM URL to its dedicated local storage key
+    this.settingsService.saveLocalDamUrl(localDamUrl);
+
+    // Build a backend payload for the shared settings
     const payload: AppSettings = {
       ...this.form,
       gemini_api_key: (this.form.gemini_api_key || '').trim(),
       gemini_model: (this.form.gemini_model || '').trim() || 'gemini-2.0-flash',
-      dam_server_url: this.damServerUrl.trim(),
     };
 
     this.settingsService.saveAllSettings(payload).subscribe({
@@ -97,7 +106,7 @@ export class SettingsDialogComponent implements OnInit {
         this.dialogRef.close(true);
       },
       error: () => {
-        this.snackBar.open('Failed to save one or more settings', '', { duration: 3000, panelClass: 'snack-error' });
+        this.snackBar.open('Saved locally; backend save failed', '', { duration: 3000, panelClass: 'snack-error' });
         this.dialogRef.close(true);
       }
     });

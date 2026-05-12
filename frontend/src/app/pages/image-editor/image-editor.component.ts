@@ -21,6 +21,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { GeminiService } from '../../core/services/gemini.service';
 import { SettingsService } from '../../core/services/settings.service';
 import { KnowledgeBaseService } from '../../core/services/knowledge-base.service';
+import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 import { EditProjectDialogComponent } from '../edit-project-dialog/edit-project-dialog.component';
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
@@ -210,7 +211,8 @@ export class ImageEditorComponent implements OnInit, OnDestroy {
     private settingsService: SettingsService,
     private kbService: KnowledgeBaseService,
     private dialog: MatDialog,
-    private snackBar: MatSnackBar
+    private snackBar: MatSnackBar,
+    private navHistory: NavigationHistoryService
   ) {}
 
   ngOnInit(): void {
@@ -1584,7 +1586,16 @@ export class ImageEditorComponent implements OnInit, OnDestroy {
   }
 
   goBack(): void {
-    this.router.navigate(['/dashboard']);
+    // Prefer popping browser history so the project page's pagination /
+    // filter query params come back. Fall back to a sensible destination
+    // (project page, then dashboard) for deep-link / fresh-tab cases.
+    if (this.image?.project_id) {
+      const queryParams: any = {};
+      if (this.image.subpart_id) queryParams.subpartId = this.image.subpart_id;
+      this.navHistory.back(['/projects', this.image.project_id], { queryParams });
+    } else {
+      this.navHistory.back(['/dashboard']);
+    }
   }
 
   get user() {

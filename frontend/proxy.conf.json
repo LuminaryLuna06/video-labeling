@@ -1,10 +1,12 @@
 {
   "/api": {
-    "target": "http://localhost:6800",
-    "secure": false
+    "target": "https://annotator-api.stecom.vn",
+    "secure": false,
+    "changeOrigin": true
   },
   "/uploads": {
-    "target": "http://localhost:6800",
-    "secure": false
+    "target": "https://annotator-api.stecom.vn",
+    "secure": false,
+    "changeOrigin": true
   }
 }

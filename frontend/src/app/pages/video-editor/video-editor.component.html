@@ -132,7 +132,7 @@
 
 <div class="editor-body" *ngIf="video">
   <!-- Hidden video for frame extraction (shared across steps) -->
-  <video #segVideoPlayer [src]="video.url" style="display:none"></video>
+  <video #segVideoPlayer [src]="video.url" preload="auto" style="display:none"></video>
 
   <!-- =================== STEP 1: VIDEO SEGMENTATION =================== -->
   <div class="step-content" *ngIf="currentStep === 1">
@@ -327,8 +327,10 @@
           </div>
         </div>
 
-        <div class="canvas-container" (wheel)="onCanvasWheel($event)">
+        <div class="canvas-container" #canvasContainer (wheel)="onCanvasWheel($event)">
           <div class="canvas-zoom-wrapper" [class.pan-active]="panMode || spaceHeld"
+               [style.width.px]="wrapperWidth || null"
+               [style.height.px]="wrapperHeight || null"
                [style.transform]="'scale(' + zoomLevel + ') translate(' + panX + 'px,' + panY + 'px)'"
                (mousedown)="onCanvasMouseDown($event)"
                (mousemove)="onCanvasMouseMove($event)"

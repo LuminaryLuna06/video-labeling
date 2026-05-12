@@ -2,13 +2,14 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { ImageItem, ImageRegion, ImageQA, Caption, Category, SegmentationResponse, ImageQCStats, ImageClassification } from '../models';
+import { DamService } from './dam.service';
 
 @Injectable({ providedIn: 'root' })
 export class ImageService {
   private readonly API = '/api/images';
   private readonly CATEGORIES_API = '/api/categories';
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private dam: DamService) {}
 
   // ---- Images ----
   uploadImage(projectId: string, file: File, subpartId?: string, width?: number, height?: number): Observable<any> {
@@ -67,10 +68,7 @@ export class ImageService {
   }
 
   segmentObject(brushMask: string, imageData?: string): Observable<SegmentationResponse> {
-    return this.http.post<SegmentationResponse>(`${this.API}/segment-object`, {
-      brush_mask: brushMask,
-      image_data: imageData
-    });
+    return this.dam.segmentObject(brushMask, imageData);
   }
 
   // ---- Categories ----

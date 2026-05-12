@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/uploads/(.*)", "destination": "https://annotator-api.stecom.vn/uploads/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
+}
