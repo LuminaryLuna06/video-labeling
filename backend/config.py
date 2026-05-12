@@ -22,7 +22,7 @@ class Config:
         origin.strip()
         for origin in os.environ.get(
             'CORS_ORIGINS',
-            'https://annotator.stecom.vn,http://localhost:4200,http://127.0.0.1:4200',
+            'https://annotator.stecom.vn,http://localhost:4200,http://127.0.0.1:4200,https://video-labeling.vercel.app',
         ).split(',')
         if origin.strip()
     ]
