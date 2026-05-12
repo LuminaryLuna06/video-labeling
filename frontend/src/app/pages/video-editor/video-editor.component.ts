@@ -1683,6 +1683,71 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   /**
+   * Capture a single frame at the currently-selected region's frame_time.
+   * Used for visual captions: the mask was drawn on this exact frame, so
+   * alignment is perfect and we avoid sending 7 redundant frames.
+   */
+  private captureRegionFrame(): Promise<{ frame: string; width: number; height: number }> {
+    return new Promise((resolve, reject) => {
+      const video = this.segVideoPlayerRef?.nativeElement;
+      if (!video) {
+        reject('Video element not available');
+        return;
+      }
+      if (!this.selectedRegion) {
+        reject('No region selected');
+        return;
+      }
+
+      const targetTime = this.selectedRegion.frame_time;
+      const captureW = video.videoWidth || 800;
+      const captureH = video.videoHeight || 450;
+
+      const capture = () => {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = captureW;
+        tempCanvas.height = captureH;
+        const ctx = tempCanvas.getContext('2d')!;
+        ctx.drawImage(video, 0, 0, captureW, captureH);
+        resolve({
+          frame: tempCanvas.toDataURL('image/jpeg', 0.85),
+          width: captureW,
+          height: captureH
+        });
+      };
+
+      const seekAndCapture = () => {
+        if (Math.abs(video.currentTime - targetTime) < 0.01 && !video.seeking) {
+          capture();
+          return;
+        }
+        video.onseeked = () => {
+          video.onseeked = null;
+          capture();
+        };
+        video.currentTime = targetTime;
+      };
+
+      if (video.readyState >= 2 && !video.seeking) {
+        seekAndCapture();
+      } else {
+        const onReady = () => {
+          video.removeEventListener('seeked', onReady);
+          video.removeEventListener('canplay', onReady);
+          seekAndCapture();
+        };
+        video.addEventListener('seeked', onReady, { once: false });
+        video.addEventListener('canplay', onReady, { once: false });
+        setTimeout(() => {
+          video.removeEventListener('seeked', onReady);
+          video.removeEventListener('canplay', onReady);
+          reject('Timeout waiting for video to be ready');
+        }, 5000);
+      }
+    });
+  }
+
+  /**
    * Capture 8 evenly-spaced frames from the current segment at native video resolution.
    * Returns { frames: base64[], width, height } so callers can rescale the mask to match.
    */
@@ -1789,10 +1854,10 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         return;
       }
       this.generatingVisual = true;
-      this.snackBar.open('Capturing 8 frames from segment...', '', { duration: 2000 });
-      this.captureSegmentFrames().then(async ({ frames, width, height }) => {
+      this.snackBar.open('Capturing frame...', '', { duration: 2000 });
+      this.captureRegionFrame().then(async ({ frame, width, height }) => {
         const scaledMask = await this.rescaleMask(maskB64, width, height);
-        this.videoService.generateCaption(frames, scaledMask, 'visual').subscribe({
+        this.videoService.generateCaption([frame], scaledMask, 'visual').subscribe({
           next: (res) => {
             this.captionData.visual_caption = res.caption;
             this.generatingVisual = false;
@@ -1805,7 +1870,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         });
       }).catch(() => {
         this.generatingVisual = false;
-        this.snackBar.open('Cannot capture frames. Please wait for video to load.', '', { duration: 3000 });
+        this.snackBar.open('Cannot capture frame. Please wait for video to load.', '', { duration: 3000 });
       });
     } else {
       // Contextual caption → segment-level, uses full-frame mask (no region mask needed)
