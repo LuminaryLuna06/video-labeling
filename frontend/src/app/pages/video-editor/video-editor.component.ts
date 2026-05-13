@@ -442,7 +442,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${this.video!.name || 'video'}_scenes.csv`;
+        a.download = `${this.video!.original_name || 'video'}_scenes.csv`;
         a.click();
         window.URL.revokeObjectURL(url);
         this.snackBar.open('Scene detection CSV downloaded', '', { duration: 3000, panelClass: 'snack-success' });
