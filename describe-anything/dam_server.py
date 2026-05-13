@@ -714,25 +714,23 @@ async def detect_scenes_endpoint(req: SceneDetectRequest):
                 "end_sec":     round(end_sec, 3),
             })
 
-        # CSV
-        buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=fields)
-        writer.writeheader()
-        writer.writerows(results)
-
-        return StreamingResponse(
-            io.StringIO(buf.getvalue()),
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=scenes.csv"}
-        )
+        return JSONResponse(content={"scenes": results})
 
     except Exception as e:
         import traceback; traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
 
     finally:
+        try:
+            if 'video' in locals() and video is not None:
+                video.close()
+        except Exception:
+            pass
         if temp_video_path and os.path.exists(temp_video_path):
-            os.remove(temp_video_path)   # luôn chạy dù crash ở đâu
+            try:
+                os.remove(temp_video_path)   # luôn chạy dù crash ở đâu
+            except Exception as e:
+                print(f"Warning: Failed to delete temp file {temp_video_path}: {e}")
 
 @app.get("/health")
 async def health_check():

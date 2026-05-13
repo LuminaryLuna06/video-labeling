@@ -28,6 +28,7 @@ import { DamService } from '../../core/services/dam.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
+import { forkJoin } from 'rxjs';
 
 @Component({
   selector: 'app-video-editor',
@@ -438,14 +439,38 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     this.snackBar.open('Detecting scenes, please wait...', '', { duration: 3000 });
     
     this.damService.detectScenes(this.video.url).subscribe({
-      next: (blob) => {
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${this.video!.original_name || 'video'}_scenes.csv`;
-        a.click();
-        window.URL.revokeObjectURL(url);
-        this.snackBar.open('Scene detection CSV downloaded', '', { duration: 3000, panelClass: 'snack-success' });
+      next: (res) => {
+        let scenes = res.scenes;
+        if (!scenes || scenes.length === 0) {
+            scenes = [{
+              scene: 1,
+              start_sec: 0,
+              end_sec: this.duration
+            }];
+            this.snackBar.open('No scenes detected, creating 1 full segment...', '', { duration: 3000 });
+        } else {
+            this.snackBar.open(`Creating ${scenes.length} segments...`, '', { duration: 3000 });
+        }
+
+        const requests = scenes.map((scene: any, index: number) => {
+          const name = `Scene ${this.segments.length + index + 1}`;
+          return this.videoService.createSegment(this.video!.id, {
+            name: name,
+            start_time: scene.start_sec,
+            end_time: scene.end_sec
+          });
+        });
+
+        forkJoin(requests).subscribe({
+          next: (createdSegments) => {
+             this.segments.push(...createdSegments);
+             this.segments.sort((a, b) => a.start_time - b.start_time);
+             this.snackBar.open(`Successfully generated ${createdSegments.length} segments!`, '', { duration: 3000, panelClass: 'snack-success' });
+          },
+          error: () => {
+             this.snackBar.open('Failed to create some segments', '', { duration: 5000, panelClass: 'snack-error' });
+          }
+        });
       },
       error: (err) => {
         this.snackBar.open('Scene detection failed: ' + err.message, '', { duration: 5000, panelClass: 'snack-error' });
