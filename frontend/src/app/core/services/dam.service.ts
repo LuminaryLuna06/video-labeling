@@ -63,6 +63,24 @@ export class DamService {
   }
 
   /**
+   * Run PySceneDetect on the DAM server to extract scenes and download them as a CSV file.
+   */
+  detectScenes(videoUrl: string, options?: { method?: string; threshold?: number; min_scene_len?: number }): Observable<Blob> {
+    const url = `${this.getDamUrl()}/scene-detect`;
+    let absoluteVideoUrl = videoUrl;
+    if (!absoluteVideoUrl.startsWith('http')) {
+      absoluteVideoUrl = window.location.origin + absoluteVideoUrl;
+    }
+    
+    return this.http.post(url, {
+      video_url: absoluteVideoUrl,
+      ...(options || {})
+    }, { responseType: 'blob' }).pipe(
+      catchError((err) => throwError(() => new Error(this.formatError(url, err))))
+    );
+  }
+
+  /**
    * Send a brush mask + frame image to DAM's /segment endpoint (SAM2-backed).
    * Returns a refined object mask.
    */

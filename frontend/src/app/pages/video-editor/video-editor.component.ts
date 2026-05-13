@@ -24,6 +24,7 @@ import { GeminiService } from '../../core/services/gemini.service';
 import { SettingsService } from '../../core/services/settings.service';
 import { KnowledgeBaseService } from '../../core/services/knowledge-base.service';
 import { NavigationHistoryService } from '../../core/services/navigation-history.service';
+import { DamService } from '../../core/services/dam.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
@@ -189,6 +190,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     private geminiService: GeminiService,
     private settingsService: SettingsService,
     private kbService: KnowledgeBaseService,
+    private damService: DamService,
     private dialog: MatDialog,
     private snackBar: MatSnackBar,
     private navHistory: NavigationHistoryService
@@ -433,22 +435,20 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
 
   autoSplit(): void {
     if (!this.video) return;
-    const segCount = Math.max(2, Math.ceil(this.duration / 10));
-    const segDuration = this.duration / segCount;
-    const newSegments: Partial<VideoSegment>[] = [];
-
-    for (let i = 0; i < segCount; i++) {
-      newSegments.push({
-        name: `Segment ${i + 1}`,
-        start_time: i * segDuration,
-        end_time: (i + 1) * segDuration
-      });
-    }
-
-    this.videoService.createSegmentsBatch(this.video.id, newSegments, true).subscribe({
-      next: (segments) => {
-        this.segments = segments;
-        this.snackBar.open(`Created ${segments.length} segments`, '', { duration: 2000, panelClass: 'snack-success' });
+    this.snackBar.open('Detecting scenes, please wait...', '', { duration: 3000 });
+    
+    this.damService.detectScenes(this.video.url).subscribe({
+      next: (blob) => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${this.video!.name || 'video'}_scenes.csv`;
+        a.click();
+        window.URL.revokeObjectURL(url);
+        this.snackBar.open('Scene detection CSV downloaded', '', { duration: 3000, panelClass: 'snack-success' });
+      },
+      error: (err) => {
+        this.snackBar.open('Scene detection failed: ' + err.message, '', { duration: 5000, panelClass: 'snack-error' });
       }
     });
   }

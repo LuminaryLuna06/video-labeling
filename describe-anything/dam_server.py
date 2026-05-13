@@ -47,6 +47,11 @@ import shutil
 import cv2
 from typing import AsyncGenerator, Generator
 from torchvision import transforms
+#thêm mới
+import os, csv, io, tempfile
+import requests
+from scenedetect import open_video, SceneManager
+from scenedetect.detectors import ContentDetector, ThresholdDetector, AdaptiveDetector
 
 # --- DAM compatibility shims for newer transformers ---
 # 1. transformers >= 4.50 moved no_init_weights out of modeling_utils; the
@@ -110,6 +115,20 @@ class ChatCompletionRequest(BaseModel):
     stream: Optional[bool] = False
     use_cache: Optional[bool] = True
     num_beams: Optional[int] = 1
+
+
+class SceneDetectRequest(BaseModel):
+    video_url: str
+    method: Optional[str] = "content"
+    threshold: Optional[float] = 27.0
+    min_scene_len: Optional[float] = 1.0
+
+
+def fmt_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:06.3f}"
 
 
 def load_image(image_url: str) -> Image:
@@ -633,6 +652,87 @@ async def get_embedding(request: EmbedRequest):
         traceback.print_exc()
         return JSONResponse(status_code=500, content={'error': str(e)})
 
+
+@app.post("/scene-detect")
+async def detect_scenes_endpoint(req: SceneDetectRequest):
+    temp_video_path = None
+    try:
+        # Download
+        print(f"Downloading video from {req.video_url}...")
+        response = requests.get(req.video_url, stream=True, timeout=(5, 60))
+        response.raise_for_status()
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            for chunk in response.iter_content(chunk_size=8192):
+                tmp.write(chunk)
+            temp_video_path = tmp.name
+
+        # Setup detector
+        video = open_video(temp_video_path)
+        fps = video.frame_rate
+        min_len_frames = int(req.min_scene_len * fps)
+
+        if req.method == "content":
+            detector = ContentDetector(
+                threshold=req.threshold or 27.0,
+                min_scene_len=min_len_frames
+            )
+        elif req.method == "threshold":
+            detector = ThresholdDetector(
+                threshold=req.threshold or 12.0,
+                min_scene_len=min_len_frames
+            )
+        elif req.method == "adaptive":
+            detector = AdaptiveDetector(
+                adaptive_threshold=req.threshold or 3.0,
+                min_scene_len=min_len_frames
+            )
+        else:
+            return JSONResponse(status_code=400,
+                                content={"error": f"Invalid method: {req.method}"})
+
+        # Detect
+        scene_manager = SceneManager()
+        scene_manager.add_detector(detector)
+        scene_manager.detect_scenes(video=video, show_progress=False)
+
+        # Build results
+        fields = ["scene", "start_time", "end_time", "duration_s",
+                  "start_frame", "end_frame", "start_sec", "end_sec"]
+        results = []
+        for i, (start, end) in enumerate(scene_manager.get_scene_list(), start=1):
+            start_sec = start.seconds
+            end_sec   = end.seconds
+            results.append({
+                "scene":       i,
+                "start_time":  fmt_time(start_sec),
+                "end_time":    fmt_time(end_sec),
+                "duration_s":  round(end_sec - start_sec, 3),
+                "start_frame": start.frame_num,
+                "end_frame":   end.frame_num,
+                "start_sec":   round(start_sec, 3),
+                "end_sec":     round(end_sec, 3),
+            })
+
+        # CSV
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(results)
+
+        return StreamingResponse(
+            io.StringIO(buf.getvalue()),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=scenes.csv"}
+        )
+
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    finally:
+        if temp_video_path and os.path.exists(temp_video_path):
+            os.remove(temp_video_path)   # luôn chạy dù crash ở đâu
 
 @app.get("/health")
 async def health_check():
