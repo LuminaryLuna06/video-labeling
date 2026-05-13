@@ -4,7 +4,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, from, throwError, forkJoin } from 'rxjs';
 import { catchError, map, switchMap } from 'rxjs/operators';
 import { SettingsService } from './settings.service';
-import { composeRgba, composeFullMaskRgba, padOrTrimFrames } from '../utils/rgba-compose';
+import { composeRgba, composeRgbJpeg, padOrTrimFrames } from '../utils/rgba-compose';
 import { SegmentationResponse } from '../models';
 
 export interface DamHealthResponse {
@@ -100,7 +100,7 @@ export class DamService {
     const composer =
       captionType === 'visual'
         ? (f: string) => composeRgba(f, maskImage, maxSide)
-        : (f: string) => composeFullMaskRgba(f, maxSide);
+        : (f: string) => composeRgbJpeg(f, maxSide);
     const prompt = captionType === 'visual' ? this.VISUAL_PROMPT : this.CONTEXTUAL_PROMPT;
 
     return from(Promise.all(padded.map(composer))).pipe(

@@ -122,16 +122,22 @@ def load_image(image_url: str) -> Image:
             raise ValueError(f"Invalid image url: {image_url}")
         image_base64 = match_results.groups()[1]
         image = PILImage.open(BytesIO(base64.b64decode(image_base64)))
-    assert image.mode == "RGBA", f"Image mode is {image.mode}, but it should be RGBA"
+    if image.mode not in ("RGB", "RGBA"):
+        image = image.convert("RGB")
     return image
 
 
-def process_rgba_image(rgba_pil):
-    image_pil = PILImage.fromarray(np.asarray(rgba_pil)[..., :3])
-    mask_pil = PILImage.fromarray(
-        (np.asarray(rgba_pil)[..., 3] > 0).astype(np.uint8) * 255)
-
-    return image_pil, mask_pil
+def process_image(image_pil):
+    # RGBA → use alpha channel as the object mask (Object Mode).
+    # RGB  → synthesize a full-white mask covering the whole frame (Video Mode).
+    if image_pil.mode == "RGBA":
+        arr = np.asarray(image_pil)
+        img = PILImage.fromarray(arr[..., :3])
+        mask = PILImage.fromarray((arr[..., 3] > 0).astype(np.uint8) * 255)
+    else:
+        img = image_pil
+        mask = PILImage.new("L", img.size, color=255)
+    return img, mask
 
 
 # ============ DINOv2 Helper Functions ============
@@ -336,7 +342,6 @@ async def chat_completions(request: ChatCompletionRequest):
                         elif content.type == "image_url":
                             image_wire_sizes.append(len(content.image_url.url))
                             image = load_image(content.image_url.url)
-                            assert image.mode == "RGBA", f"Image mode is {image.mode}, but it should be RGBA"
                             images.append(image)
                         else:
                             raise ValueError("Unsupported content type")
@@ -381,7 +386,7 @@ async def chat_completions(request: ChatCompletionRequest):
         # Print the query for debugging
         # print(f"Query: {query}")
 
-        pils = [process_rgba_image(image) for image in images]
+        pils = [process_image(image) for image in images]
 
         image_pils, mask_pils = zip(*pils)
 

@@ -72,6 +72,31 @@ export async function composeRgba(
 }
 
 /**
+ * Encode the frame as a JPEG (no mask channel). Used for contextual captions
+ * once DAM accepts plain RGB and synthesizes a full-white mask server-side —
+ * ~10x smaller wire payload than the RGBA PNG path.
+ */
+export async function composeRgbJpeg(
+  frameB64: string,
+  maxSide?: number | null,
+  quality = 0.8
+): Promise<string> {
+  const frame = await loadImage(frameB64);
+  const { w, h } = maxSide && maxSide > 0
+    ? fitToShortEdge(frame.naturalWidth, frame.naturalHeight, maxSide)
+    : { w: frame.naturalWidth, h: frame.naturalHeight };
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  ctx.drawImage(frame, 0, 0, w, h);
+
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+/**
  * Compose an RGBA PNG with alpha = 255 everywhere (entire frame visible).
  * Port of backend `_make_full_mask_rgba`. Used for contextual captions.
  */
