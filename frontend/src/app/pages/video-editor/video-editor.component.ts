@@ -65,9 +65,9 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   steps = ['Segment Video', 'Object Region', 'Captioning'];
   currentStep = 1;
 
-  // Video navigation (next/previous within subpart)
   subpartVideoList: VideoItem[] = [];
   currentVideoIndex = 0;
+  originPage = 1; // Track which page we came from
   get hasPreviousVideo(): boolean { return this.currentVideoIndex > 0; }
   get hasNextVideo(): boolean { return this.currentVideoIndex < this.subpartVideoList.length - 1; }
 
@@ -218,6 +218,10 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     this.route.paramMap.subscribe(params => {
       const videoId = params.get('videoId');
       if (videoId) {
+        // Capture origin page from query params if available (first time entering editor)
+        const vP = this.route.snapshot.queryParamMap.get('vP');
+        if (vP) this.originPage = +vP;
+        
         this.resetComponentState();
         this.loadVideo(videoId);
       }
@@ -2207,14 +2211,15 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   goBack(): void {
-    // Pop the browser history entry so the project page's pagination /
-    // filter query params come back exactly as they were. Falls back to
-    // an explicit navigation only when this tab has no in-app history
-    // (e.g. user opened a deep link to the editor).
+    // Navigate back to the project page, preserving the subpart and page index.
     if (this.video?.project_id) {
       const queryParams: any = {};
       if (this.video.subpart_id) queryParams.subpartId = this.video.subpart_id;
-      this.navHistory.back(['/projects', this.video.project_id], { queryParams });
+      if (this.originPage > 1) queryParams.vP = this.originPage;
+      
+      // We navigate explicitly to ensure we skip over any internal video-to-video 
+      // navigation history.
+      this.router.navigate(['/projects', this.video.project_id], { queryParams });
     } else {
       this.navHistory.back(['/dashboard']);
     }
