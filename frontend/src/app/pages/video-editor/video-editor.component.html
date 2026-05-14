@@ -85,6 +85,16 @@
     </div>
   </div>
   <div class="info-bar-right">
+    <!-- Video Navigation (next/previous within subpart) -->
+    <div class="video-navigation" *ngIf="subpartVideoList.length > 1">
+      <button mat-icon-button (click)="goToPreviousVideo()" [disabled]="!hasPreviousVideo" matTooltip="Previous Video">
+        <mat-icon>chevron_left</mat-icon>
+      </button>
+      <span class="video-counter">{{ currentVideoIndex + 1 }} / {{ subpartVideoList.length }}</span>
+      <button mat-icon-button (click)="goToNextVideo()" [disabled]="!hasNextVideo" matTooltip="Next Video">
+        <mat-icon>chevron_right</mat-icon>
+      </button>
+    </div>
     <!-- Review Summary for multi-reviewer -->
     <span class="ed-review-summary" *ngIf="video.reviews?.length">
       {{ getReviewSummary() }}

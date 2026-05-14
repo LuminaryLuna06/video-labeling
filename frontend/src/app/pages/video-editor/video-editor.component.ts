@@ -65,6 +65,12 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   steps = ['Segment Video', 'Object Region', 'Captioning'];
   currentStep = 1;
 
+  // Video navigation (next/previous within subpart)
+  subpartVideoList: VideoItem[] = [];
+  currentVideoIndex = 0;
+  get hasPreviousVideo(): boolean { return this.currentVideoIndex > 0; }
+  get hasNextVideo(): boolean { return this.currentVideoIndex < this.subpartVideoList.length - 1; }
+
   // Player
   isPlaying = false;
   isMuted = false;
@@ -207,8 +213,15 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    const videoId = this.route.snapshot.paramMap.get('videoId')!;
-    this.loadVideo(videoId);
+    // Subscribe to route params so navigation between videos works without
+    // destroying/recreating the component.
+    this.route.paramMap.subscribe(params => {
+      const videoId = params.get('videoId');
+      if (videoId) {
+        this.resetComponentState();
+        this.loadVideo(videoId);
+      }
+    });
   }
 
   ngAfterViewInit(): void {
@@ -281,11 +294,119 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
           this.selectedSegment = this.segments[0];
         }
 
+        // Load sibling videos for navigation
+        this.loadSubpartVideoList(video);
+
         // Initialize the current step (load frame, regions, counts)
         this.initCurrentStep();
       },
       error: () => this.router.navigate(['/dashboard'])
     });
+  }
+
+  /** Load all videos in the same subpart (or project) for next/prev navigation */
+  private loadSubpartVideoList(video: VideoItem): void {
+    if (video.subpart_id) {
+      this.videoService.getSubpartVideos(video.subpart_id).subscribe({
+        next: (videos) => {
+          this.subpartVideoList = videos;
+          this.currentVideoIndex = videos.findIndex(v => v.id === video.id);
+          if (this.currentVideoIndex < 0) this.currentVideoIndex = 0;
+        }
+      });
+    } else if (video.project_id) {
+      this.videoService.getProjectVideos(video.project_id).subscribe({
+        next: (videos) => {
+          this.subpartVideoList = videos;
+          this.currentVideoIndex = videos.findIndex(v => v.id === video.id);
+          if (this.currentVideoIndex < 0) this.currentVideoIndex = 0;
+        }
+      });
+    }
+  }
+
+  // ============ Video Navigation (Next/Previous) ============
+  goToPreviousVideo(): void {
+    if (this.hasPreviousVideo) {
+      const prevVideo = this.subpartVideoList[this.currentVideoIndex - 1];
+      this.router.navigate(['/editor', prevVideo.id]);
+    }
+  }
+
+  goToNextVideo(): void {
+    if (this.hasNextVideo) {
+      const nextVideo = this.subpartVideoList[this.currentVideoIndex + 1];
+      this.router.navigate(['/editor', nextVideo.id]);
+    }
+  }
+
+  /** Reset all component state before loading a new video */
+  private resetComponentState(): void {
+    // Pause current video if playing
+    if (this.videoPlayerRef?.nativeElement) {
+      this.videoPlayerRef.nativeElement.pause();
+    }
+
+    // Player state
+    this.isPlaying = false;
+    this.isMuted = false;
+    this.currentTime = 0;
+    this.duration = 0;
+    this.timeMarkers = [];
+
+    // Segments & regions
+    this.segments = [];
+    this.selectedSegment = null;
+    this.segmentStart = null;
+    this.segmentEnd = null;
+    this.regions = [];
+    this.selectedRegion = null;
+    this.segmentRegionCounts = {};
+
+    // Drawing state
+    this.hasDrawing = false;
+    this.lastSegmentedMask = '';
+    this.isDrawing = false;
+    this.segmenting = false;
+    this.regionColorIndex = 0;
+
+    // Zoom/Pan
+    this.zoomLevel = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.panMode = false;
+
+    // Captions
+    this.captionData = {
+      visual_caption: '', contextual_caption: '', knowledge_caption: '', combined_caption: '',
+      visual_caption_vi: '', contextual_caption_vi: '', knowledge_caption_vi: '', combined_caption_vi: ''
+    };
+    this.segmentCaptionData = {
+      visual_caption: '', contextual_caption: '', knowledge_caption: '', combined_caption: '',
+      visual_caption_vi: '', contextual_caption_vi: '', knowledge_caption_vi: '', combined_caption_vi: ''
+    };
+    this.captionKBIds = [];
+    this.segmentCaptionKBIds = [];
+    this.regionCaptionCache = {};
+    this.generatingVisual = false;
+    this.generatingContextual = false;
+    this.generatingAll = false;
+    this.translating = false;
+
+    // Segment preview
+    this.segmentPreviewSrc = '';
+    this.segmentPreviewPlaying = false;
+    this.segmentPreviewProgress = 0;
+
+    // Review dialogs
+    this.showEditorApproveDialog = false;
+    this.showEditorRejectDialog = false;
+    this.editorRejectComment = '';
+
+    // Categories
+    this.categories = [];
+    this.showCategoryManager = false;
+    this.showCategoryDropdown = false;
   }
 
   /** Run once after loadVideo or setStep to bootstrap the active step */

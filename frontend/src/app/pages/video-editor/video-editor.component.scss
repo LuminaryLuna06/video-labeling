@@ -41,6 +41,39 @@
 .toolbar-center {
   display: flex;
   align-items: center;
+  gap: 12px;
+}
+
+// Video Navigation (next/prev)
+.video-navigation {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 20px;
+  padding: 2px 4px;
+
+  button {
+    color: #94a3b8;
+
+    &:hover:not(:disabled) {
+      color: #e1e8ed;
+    }
+
+    &:disabled {
+      color: #374151;
+    }
+  }
+
+  .video-counter {
+    font-size: 12px;
+    font-weight: 600;
+    color: #94a3b8;
+    min-width: 44px;
+    text-align: center;
+    font-family: 'SF Mono', monospace;
+    user-select: none;
+  }
 }
 
 .step-tabs {
