@@ -47,5 +47,5 @@ export function keepRanges(cuts: CutRange[], duration: number): CutRange[] {
     cursor = c.end;
   }
   if (cursor < duration) keep.push({ start: cursor, end: duration });
-  return keep;
+  return keep.filter(r => r.end - r.start > 0.001);
 }
