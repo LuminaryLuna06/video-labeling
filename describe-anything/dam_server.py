@@ -771,7 +771,7 @@ def _keep_ranges(cuts: List[tuple[float, float]], duration: float) -> List[tuple
         cursor = e
     if cursor < duration:
         keep.append((cursor, duration))
-    return keep
+    return [(s, e) for s, e in keep if e - s > 0.001]
 
 
 def _probe_duration(path: str) -> float:
