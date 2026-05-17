@@ -90,7 +90,6 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   cutRanges: CutRange[] = [];
   pendingCutStart: number | null = null;
   trimming = false;
-  trimPanelOpen = false;
 
   // Regions
   regions: ObjectRegion[] = [];
