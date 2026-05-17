@@ -829,13 +829,12 @@ async def trim_video(req: TrimRequest):
             print(f"[trim] Downloading {req.video_url}")
             r = requests.get(req.video_url, stream=True, timeout=(5, 60))
             r.raise_for_status()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                for chunk in r.iter_content(chunk_size=8192):
+                    tmp.write(chunk)
+                src_path = tmp.name
         except Exception as e:
             return JSONResponse(status_code=502, content={"error": f"failed to fetch source video: {e}"})
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-            for chunk in r.iter_content(chunk_size=8192):
-                tmp.write(chunk)
-            src_path = tmp.name
 
         # 2. Probe duration + audio presence
         try:
@@ -870,16 +869,24 @@ async def trim_video(req: TrimRequest):
             tail = (proc.stderr or "")[-500:]
             return JSONResponse(status_code=500, content={"error": f"ffmpeg failed: {tail}"})
 
-        # 5. Stream back
-        def file_iter():
-            with open(out_path, "rb") as f:
-                while True:
-                    chunk = f.read(64 * 1024)
-                    if not chunk:
-                        break
-                    yield chunk
+        # 5. Stream back, deleting out_path after the body is fully sent
+        def file_iter(path: str):
+            try:
+                with open(path, "rb") as f:
+                    while True:
+                        chunk = f.read(64 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    print(f"[trim] warning: failed to delete {path}: {e}")
+        out_to_stream = out_path
+        out_path = None  # ownership transferred to file_iter; skip outer cleanup
         return StreamingResponse(
-            file_iter(),
+            file_iter(out_to_stream),
             media_type="video/mp4",
             headers={"Content-Disposition": 'attachment; filename="trimmed.mp4"'}
         )
@@ -889,12 +896,16 @@ async def trim_video(req: TrimRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
     finally:
-        for p in (src_path, out_path):
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                except Exception as e:
-                    print(f"[trim] warning: failed to delete {p}: {e}")
+        if src_path and os.path.exists(src_path):
+            try:
+                os.remove(src_path)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {src_path}: {e}")
+        if out_path and os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {out_path}: {e}")
 
 
 @app.get("/health")
