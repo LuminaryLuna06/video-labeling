@@ -24,9 +24,11 @@ import { GeminiService } from '../../core/services/gemini.service';
 import { SettingsService } from '../../core/services/settings.service';
 import { KnowledgeBaseService } from '../../core/services/knowledge-base.service';
 import { NavigationHistoryService } from '../../core/services/navigation-history.service';
+import { DamService } from '../../core/services/dam.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
+import { forkJoin } from 'rxjs';
 
 @Component({
   selector: 'app-video-editor',
@@ -62,6 +64,12 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   video: VideoItem | null = null;
   steps = ['Segment Video', 'Object Region', 'Captioning'];
   currentStep = 1;
+
+  subpartVideoList: VideoItem[] = [];
+  currentVideoIndex = 0;
+  originPage = 1; // Track which page we came from
+  get hasPreviousVideo(): boolean { return this.currentVideoIndex > 0; }
+  get hasNextVideo(): boolean { return this.currentVideoIndex < this.subpartVideoList.length - 1; }
 
   // Player
   isPlaying = false;
@@ -189,6 +197,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     private geminiService: GeminiService,
     private settingsService: SettingsService,
     private kbService: KnowledgeBaseService,
+    private damService: DamService,
     private dialog: MatDialog,
     private snackBar: MatSnackBar,
     private navHistory: NavigationHistoryService
@@ -204,8 +213,19 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    const videoId = this.route.snapshot.paramMap.get('videoId')!;
-    this.loadVideo(videoId);
+    // Subscribe to route params so navigation between videos works without
+    // destroying/recreating the component.
+    this.route.paramMap.subscribe(params => {
+      const videoId = params.get('videoId');
+      if (videoId) {
+        // Capture origin page from query params if available (first time entering editor)
+        const vP = this.route.snapshot.queryParamMap.get('vP');
+        if (vP) this.originPage = +vP;
+        
+        this.resetComponentState();
+        this.loadVideo(videoId);
+      }
+    });
   }
 
   ngAfterViewInit(): void {
@@ -278,11 +298,119 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
           this.selectedSegment = this.segments[0];
         }
 
+        // Load sibling videos for navigation
+        this.loadSubpartVideoList(video);
+
         // Initialize the current step (load frame, regions, counts)
         this.initCurrentStep();
       },
       error: () => this.router.navigate(['/dashboard'])
     });
+  }
+
+  /** Load all videos in the same subpart (or project) for next/prev navigation */
+  private loadSubpartVideoList(video: VideoItem): void {
+    if (video.subpart_id) {
+      this.videoService.getSubpartVideos(video.subpart_id).subscribe({
+        next: (videos) => {
+          this.subpartVideoList = videos;
+          this.currentVideoIndex = videos.findIndex(v => v.id === video.id);
+          if (this.currentVideoIndex < 0) this.currentVideoIndex = 0;
+        }
+      });
+    } else if (video.project_id) {
+      this.videoService.getProjectVideos(video.project_id).subscribe({
+        next: (videos) => {
+          this.subpartVideoList = videos;
+          this.currentVideoIndex = videos.findIndex(v => v.id === video.id);
+          if (this.currentVideoIndex < 0) this.currentVideoIndex = 0;
+        }
+      });
+    }
+  }
+
+  // ============ Video Navigation (Next/Previous) ============
+  goToPreviousVideo(): void {
+    if (this.hasPreviousVideo) {
+      const prevVideo = this.subpartVideoList[this.currentVideoIndex - 1];
+      this.router.navigate(['/editor', prevVideo.id]);
+    }
+  }
+
+  goToNextVideo(): void {
+    if (this.hasNextVideo) {
+      const nextVideo = this.subpartVideoList[this.currentVideoIndex + 1];
+      this.router.navigate(['/editor', nextVideo.id]);
+    }
+  }
+
+  /** Reset all component state before loading a new video */
+  private resetComponentState(): void {
+    // Pause current video if playing
+    if (this.videoPlayerRef?.nativeElement) {
+      this.videoPlayerRef.nativeElement.pause();
+    }
+
+    // Player state
+    this.isPlaying = false;
+    this.isMuted = false;
+    this.currentTime = 0;
+    this.duration = 0;
+    this.timeMarkers = [];
+
+    // Segments & regions
+    this.segments = [];
+    this.selectedSegment = null;
+    this.segmentStart = null;
+    this.segmentEnd = null;
+    this.regions = [];
+    this.selectedRegion = null;
+    this.segmentRegionCounts = {};
+
+    // Drawing state
+    this.hasDrawing = false;
+    this.lastSegmentedMask = '';
+    this.isDrawing = false;
+    this.segmenting = false;
+    this.regionColorIndex = 0;
+
+    // Zoom/Pan
+    this.zoomLevel = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.panMode = false;
+
+    // Captions
+    this.captionData = {
+      visual_caption: '', contextual_caption: '', knowledge_caption: '', combined_caption: '',
+      visual_caption_vi: '', contextual_caption_vi: '', knowledge_caption_vi: '', combined_caption_vi: ''
+    };
+    this.segmentCaptionData = {
+      visual_caption: '', contextual_caption: '', knowledge_caption: '', combined_caption: '',
+      visual_caption_vi: '', contextual_caption_vi: '', knowledge_caption_vi: '', combined_caption_vi: ''
+    };
+    this.captionKBIds = [];
+    this.segmentCaptionKBIds = [];
+    this.regionCaptionCache = {};
+    this.generatingVisual = false;
+    this.generatingContextual = false;
+    this.generatingAll = false;
+    this.translating = false;
+
+    // Segment preview
+    this.segmentPreviewSrc = '';
+    this.segmentPreviewPlaying = false;
+    this.segmentPreviewProgress = 0;
+
+    // Review dialogs
+    this.showEditorApproveDialog = false;
+    this.showEditorRejectDialog = false;
+    this.editorRejectComment = '';
+
+    // Categories
+    this.categories = [];
+    this.showCategoryManager = false;
+    this.showCategoryDropdown = false;
   }
 
   /** Run once after loadVideo or setStep to bootstrap the active step */
@@ -433,22 +561,44 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
 
   autoSplit(): void {
     if (!this.video) return;
-    const segCount = Math.max(2, Math.ceil(this.duration / 10));
-    const segDuration = this.duration / segCount;
-    const newSegments: Partial<VideoSegment>[] = [];
+    this.snackBar.open('Detecting scenes, please wait...', '', { duration: 3000 });
+    
+    this.damService.detectScenes(this.video.url).subscribe({
+      next: (res) => {
+        let scenes = res.scenes;
+        if (!scenes || scenes.length === 0) {
+            scenes = [{
+              scene: 1,
+              start_sec: 0,
+              end_sec: this.duration
+            }];
+            this.snackBar.open('No scenes detected, creating 1 full segment...', '', { duration: 3000 });
+        } else {
+            this.snackBar.open(`Creating ${scenes.length} segments...`, '', { duration: 3000 });
+        }
 
-    for (let i = 0; i < segCount; i++) {
-      newSegments.push({
-        name: `Segment ${i + 1}`,
-        start_time: i * segDuration,
-        end_time: (i + 1) * segDuration
-      });
-    }
+        const requests = scenes.map((scene: any, index: number) => {
+          const name = `Scene ${this.segments.length + index + 1}`;
+          return this.videoService.createSegment(this.video!.id, {
+            name: name,
+            start_time: scene.start_sec,
+            end_time: scene.end_sec
+          });
+        });
 
-    this.videoService.createSegmentsBatch(this.video.id, newSegments, true).subscribe({
-      next: (segments) => {
-        this.segments = segments;
-        this.snackBar.open(`Created ${segments.length} segments`, '', { duration: 2000, panelClass: 'snack-success' });
+        forkJoin(requests).subscribe({
+          next: (createdSegments) => {
+             this.segments.push(...createdSegments);
+             this.segments.sort((a, b) => a.start_time - b.start_time);
+             this.snackBar.open(`Successfully generated ${createdSegments.length} segments!`, '', { duration: 3000, panelClass: 'snack-success' });
+          },
+          error: () => {
+             this.snackBar.open('Failed to create some segments', '', { duration: 5000, panelClass: 'snack-error' });
+          }
+        });
+      },
+      error: (err) => {
+        this.snackBar.open('Scene detection failed: ' + err.message, '', { duration: 5000, panelClass: 'snack-error' });
       }
     });
   }
@@ -1299,13 +1449,8 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   onSegmentVideoLoaded(): void {
     const vid = this.segmentPreviewVideoRef?.nativeElement;
     if (!vid || !this.selectedSegment) return;
-    // Auto-play from segment start
     vid.currentTime = this.selectedSegment.start_time;
-    vid.play().then(() => {
-      this.segmentPreviewPlaying = true;
-    }).catch(() => {
-      this.segmentPreviewPlaying = false;
-    });
+    this.segmentPreviewPlaying = false;
   }
 
   onSegmentPreviewTimeUpdate(): void {
@@ -2061,14 +2206,15 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   goBack(): void {
-    // Pop the browser history entry so the project page's pagination /
-    // filter query params come back exactly as they were. Falls back to
-    // an explicit navigation only when this tab has no in-app history
-    // (e.g. user opened a deep link to the editor).
+    // Navigate back to the project page, preserving the subpart and page index.
     if (this.video?.project_id) {
       const queryParams: any = {};
       if (this.video.subpart_id) queryParams.subpartId = this.video.subpart_id;
-      this.navHistory.back(['/projects', this.video.project_id], { queryParams });
+      if (this.originPage > 1) queryParams.vP = this.originPage;
+      
+      // We navigate explicitly to ensure we skip over any internal video-to-video 
+      // navigation history.
+      this.router.navigate(['/projects', this.video.project_id], { queryParams });
     } else {
       this.navHistory.back(['/dashboard']);
     }

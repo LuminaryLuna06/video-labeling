@@ -737,6 +737,7 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
   openEditor(video: VideoItem): void {
     const queryParams: any = {};
     if (this.selectedSubpart) queryParams.subpartId = this.selectedSubpart.id;
+    queryParams.vP = this.videoPage; // Pass current page
     this.router.navigate(['/editor', video.id], { queryParams });
   }
 

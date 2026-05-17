@@ -4,7 +4,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, from, throwError, forkJoin } from 'rxjs';
 import { catchError, map, switchMap } from 'rxjs/operators';
 import { SettingsService } from './settings.service';
-import { composeRgba, composeFullMaskRgba, padOrTrimFrames } from '../utils/rgba-compose';
+import { composeRgba, composeRgbJpeg, padOrTrimFrames } from '../utils/rgba-compose';
 import { SegmentationResponse } from '../models';
 
 export interface DamHealthResponse {
@@ -63,6 +63,24 @@ export class DamService {
   }
 
   /**
+   * Run PySceneDetect on the DAM server to extract scenes and download them as a CSV file.
+   */
+  detectScenes(videoUrl: string, options?: { method?: string; threshold?: number; min_scene_len?: number }): Observable<{ scenes: any[] }> {
+    const url = `${this.getDamUrl()}/scene-detect`;
+    let absoluteVideoUrl = videoUrl;
+    if (!absoluteVideoUrl.startsWith('http')) {
+      absoluteVideoUrl = window.location.origin + absoluteVideoUrl;
+    }
+    
+    return this.http.post<{ scenes: any[] }>(url, {
+      video_url: absoluteVideoUrl,
+      ...(options || {})
+    }).pipe(
+      catchError((err) => throwError(() => new Error(this.formatError(url, err))))
+    );
+  }
+
+  /**
    * Send a brush mask + frame image to DAM's /segment endpoint (SAM2-backed).
    * Returns a refined object mask.
    */
@@ -100,7 +118,7 @@ export class DamService {
     const composer =
       captionType === 'visual'
         ? (f: string) => composeRgba(f, maskImage, maxSide)
-        : (f: string) => composeFullMaskRgba(f, maxSide);
+        : (f: string) => composeRgbJpeg(f, maxSide);
     const prompt = captionType === 'visual' ? this.VISUAL_PROMPT : this.CONTEXTUAL_PROMPT;
 
     return from(Promise.all(padded.map(composer))).pipe(

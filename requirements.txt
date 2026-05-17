@@ -11,3 +11,4 @@ requests>=2.32.0
 faiss-cpu>=1.8.0
 packaging>=24.0
 opencv-python>=4.10.0
+scenedetect>=0.6.3
