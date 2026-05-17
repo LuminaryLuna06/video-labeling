@@ -94,7 +94,26 @@ export class DamService {
       video_url: absoluteVideoUrl,
       cut_ranges: cutRanges
     }, { responseType: 'blob' as 'blob' }).pipe(
-      catchError((err) => throwError(() => new Error(this.formatError(url, err))))
+      catchError((err) => {
+        if (err?.error instanceof Blob) {
+          return from((err.error as Blob).text()).pipe(
+            switchMap((text: string) => {
+              let msg: string = text;
+              try {
+                const parsed = JSON.parse(text);
+                const candidate = parsed?.error ?? parsed?.detail;
+                if (typeof candidate === 'string' && candidate) {
+                  msg = candidate;
+                }
+              } catch {
+                // not JSON — keep the raw text
+              }
+              return throwError(() => new Error(msg || `DAM /trim failed (HTTP ${err?.status ?? '?'})`));
+            })
+          );
+        }
+        return throwError(() => new Error(this.formatError(url, err)));
+      })
     );
   }
 
