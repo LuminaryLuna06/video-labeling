@@ -2476,49 +2476,58 @@
   }
 }
 
-// ============ Trim panel ============
+// ============ Trim panel (collapsible) ============
 .trim-panel {
-  margin-bottom: 12px;
-  padding: 12px;
-  border: 1px solid rgba(244, 67, 54, 0.35); // warn-tinted
+  margin-bottom: 8px;
+  border: 1px solid rgba(244, 67, 54, 0.35);
   border-radius: 6px;
   background: rgba(244, 67, 54, 0.04);
+  overflow: hidden;
 
-  .trim-header {
+  .trim-toggle {
     display: flex;
-    align-items: baseline;
-    gap: 12px;
-    margin-bottom: 8px;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 4px 10px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    color: #c62828;
+    text-align: left;
+    font-family: inherit;
 
-    h4 { margin: 0; font-size: 14px; }
-    .hint { font-size: 12px; opacity: 0.7; }
+    mat-icon {
+      font-size: 18px;
+      width: 18px;
+      height: 18px;
+    }
+
+    .trim-title { font-weight: 500; }
+    .trim-summary { opacity: 0.75; font-size: 12px; }
+    .trim-summary.trimming { font-style: italic; }
+    .trim-spacer { flex: 1; }
+    .chevron { opacity: 0.6; }
+
+    &:hover { background: rgba(244, 67, 54, 0.06); }
   }
 
-  .trim-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
-  }
+  .trim-body {
+    padding: 8px 10px 10px;
+    border-top: 1px solid rgba(244, 67, 54, 0.2);
 
-  .cut-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-
-    li {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 4px 8px;
-      border-radius: 4px;
+    .trim-hint {
+      display: block;
       font-size: 12px;
-      font-variant-numeric: tabular-nums;
+      opacity: 0.75;
+      margin-bottom: 8px;
+    }
 
-      &:nth-child(odd) { background: rgba(0,0,0,0.03); }
-
-      .cut-range-text { color: #c62828; }
-      .cut-range-dur  { opacity: 0.7; margin-left: 6px; }
+    .trim-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
     }
   }
 }
@@ -2553,7 +2562,7 @@
   background: rgba(244, 67, 54, 0.35);
   border-left: 2px solid #d32f2f;
   border-right: 2px solid #d32f2f;
-  pointer-events: none;
+  pointer-events: none; // band itself passes clicks through to the timeline
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2565,6 +2574,34 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
   }
+
+  .cut-remove {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.55);
+    color: white;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: auto; // overrides parent's pointer-events:none
+    transition: opacity 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-family: inherit;
+
+    &:hover { background: rgba(0, 0, 0, 0.8); }
+    &:disabled { opacity: 0 !important; cursor: default; }
+  }
+
+  &:hover .cut-remove { opacity: 1; }
 }
 
 .timeline-pending-cut-start {
