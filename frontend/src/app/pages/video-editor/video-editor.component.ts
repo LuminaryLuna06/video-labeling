@@ -1449,13 +1449,8 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   onSegmentVideoLoaded(): void {
     const vid = this.segmentPreviewVideoRef?.nativeElement;
     if (!vid || !this.selectedSegment) return;
-    // Auto-play from segment start
     vid.currentTime = this.selectedSegment.start_time;
-    vid.play().then(() => {
-      this.segmentPreviewPlaying = true;
-    }).catch(() => {
-      this.segmentPreviewPlaying = false;
-    });
+    this.segmentPreviewPlaying = false;
   }
 
   onSegmentPreviewTimeUpdate(): void {
