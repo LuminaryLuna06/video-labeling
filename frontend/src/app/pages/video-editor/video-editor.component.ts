@@ -28,6 +28,7 @@ import { DamService } from '../../core/services/dam.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
+import { normalizeCuts, keepRanges, CutRange } from '../../core/utils/cut-ranges';
 import { forkJoin } from 'rxjs';
 
 @Component({
@@ -83,6 +84,11 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
   selectedSegment: VideoSegment | null = null;
   segmentStart: number | null = null;
   segmentEnd: number | null = null;
+
+  // Trim (cut ranges to remove)
+  cutRanges: CutRange[] = [];
+  pendingCutStart: number | null = null;
+  trimming = false;
 
   // Regions
   regions: ObjectRegion[] = [];
@@ -363,6 +369,12 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     this.selectedSegment = null;
     this.segmentStart = null;
     this.segmentEnd = null;
+
+    // Trim
+    this.cutRanges = [];
+    this.pendingCutStart = null;
+    this.trimming = false;
+
     this.regions = [];
     this.selectedRegion = null;
     this.segmentRegionCounts = {};
@@ -555,6 +567,95 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         this.segmentStart = null;
         this.segmentEnd = null;
         this.snackBar.open('Segment added!', '', { duration: 1500, panelClass: 'snack-success' });
+      }
+    });
+  }
+
+  // ============ Trim Operations ============
+  markCutStart(): void {
+    this.pendingCutStart = this.currentTime;
+    this.snackBar.open(`▶ Cut start at ${this.formatTime(this.currentTime)}`, '', { duration: 1500 });
+  }
+
+  markCutEnd(): void {
+    if (this.pendingCutStart === null) {
+      this.snackBar.open('Mark the cut start first', '', { duration: 1500 });
+      return;
+    }
+    const start = Math.min(this.pendingCutStart, this.currentTime);
+    const end = Math.max(this.pendingCutStart, this.currentTime);
+    if (end - start < 0.05) {
+      this.snackBar.open('Cut is too short', '', { duration: 1500 });
+      return;
+    }
+    this.cutRanges = [...this.cutRanges, { id: crypto.randomUUID(), start, end }];
+    this.pendingCutStart = null;
+    this.snackBar.open(`Cut added: ${this.formatTime(start)} → ${this.formatTime(end)}`, '', { duration: 1500 });
+  }
+
+  removeCut(id: string | undefined): void {
+    if (!id) return;
+    this.cutRanges = this.cutRanges.filter(c => c.id !== id);
+  }
+
+  canSaveTrimmed(): boolean {
+    return !this.trimming
+      && this.cutRanges.length > 0
+      && this.pendingCutStart === null
+      && keepRanges(this.cutRanges, this.duration).length > 0;
+  }
+
+  private deriveTrimmedName(original: string): string {
+    const dot = original.lastIndexOf('.');
+    const base = dot > 0 ? original.slice(0, dot) : original;
+    return `${base}_trimmed.mp4`;
+  }
+
+  saveTrimmed(): void {
+    if (!this.video || this.trimming || this.cutRanges.length === 0) return;
+    if (this.pendingCutStart !== null) return;
+
+    const keeps = keepRanges(this.cutRanges, this.duration);
+    if (keeps.length === 0) {
+      this.snackBar.open('Cuts cover the whole video — nothing left to save', '', { duration: 3000 });
+      return;
+    }
+
+    this.trimming = true;
+    const ranges = this.cutRanges.map(c => ({ start_sec: c.start, end_sec: c.end }));
+    const trimmedDuration = keeps.reduce((sum, k) => sum + (k.end - k.start), 0);
+    const sourceVideo = this.video;
+
+    this.videoService.trimVideo(sourceVideo.url, ranges).subscribe({
+      next: (blob) => {
+        const trimmedName = this.deriveTrimmedName(sourceVideo.original_name);
+        const file = new File([blob], trimmedName, { type: 'video/mp4' });
+        if (!sourceVideo.project_id) {
+          this.trimming = false;
+          this.snackBar.open('Cannot save: source video has no project', '', { duration: 3000, panelClass: 'snack-error' });
+          return;
+        }
+        this.videoService.uploadVideo(
+          sourceVideo.project_id,
+          file,
+          sourceVideo.subpart_id,
+          trimmedDuration
+        ).subscribe({
+          next: (res) => {
+            this.trimming = false;
+            this.snackBar
+              .open(`Saved as '${trimmedName}'`, 'Open', { duration: 5000, panelClass: 'snack-success' })
+              .onAction().subscribe(() => this.router.navigate(['/editor', res.id]));
+          },
+          error: () => {
+            this.trimming = false;
+            this.snackBar.open('Trim succeeded but upload failed', '', { duration: 4000, panelClass: 'snack-error' });
+          }
+        });
+      },
+      error: (err) => {
+        this.trimming = false;
+        this.snackBar.open(`Trim failed: ${err?.message || 'unknown error'}`, '', { duration: 4000, panelClass: 'snack-error' });
       }
     });
   }

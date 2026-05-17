@@ -2475,3 +2475,103 @@
     color: #f59e0b;
   }
 }
+
+// ============ Trim panel ============
+.trim-panel {
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid rgba(244, 67, 54, 0.35); // warn-tinted
+  border-radius: 6px;
+  background: rgba(244, 67, 54, 0.04);
+
+  .trim-header {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 8px;
+
+    h4 { margin: 0; font-size: 14px; }
+    .hint { font-size: 12px; opacity: 0.7; }
+  }
+
+  .trim-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+  }
+
+  .cut-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+
+    li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+
+      &:nth-child(odd) { background: rgba(0,0,0,0.03); }
+
+      .cut-range-text { color: #c62828; }
+      .cut-range-dur  { opacity: 0.7; margin-left: 6px; }
+    }
+  }
+}
+
+// ============ Cut markers on seek bar ============
+.cut-marker {
+  position: absolute;
+  top: -2px;
+  height: 10px;
+  background: rgba(244, 67, 54, 0.45);
+  border-left: 2px solid #d32f2f;
+  border-right: 2px solid #d32f2f;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.pending-cut-start {
+  position: absolute;
+  top: -4px;
+  width: 3px;
+  height: 14px;
+  background: #d32f2f;
+  z-index: 4;
+  pointer-events: none;
+}
+
+// ============ Cut markers on timeline track ============
+.timeline-cut {
+  position: absolute;
+  top: 4px;
+  bottom: 24px;
+  background: rgba(244, 67, 54, 0.35);
+  border-left: 2px solid #d32f2f;
+  border-right: 2px solid #d32f2f;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  .tl-cut-name {
+    color: #b71c1c;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+}
+
+.timeline-pending-cut-start {
+  position: absolute;
+  top: 2px;
+  bottom: 22px;
+  width: 3px;
+  background: #d32f2f;
+  pointer-events: none;
+}

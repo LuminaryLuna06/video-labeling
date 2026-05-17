@@ -191,11 +191,54 @@
               [style.background]="getSegmentColor(segments.length) + '50'"
               [style.borderColor]="getSegmentColor(segments.length)">
             </div>
+            <!-- Trim cut markers -->
+            <div *ngFor="let c of cutRanges" class="cut-marker"
+              [style.left.%]="(c.start / duration) * 100"
+              [style.width.%]="((c.end - c.start) / duration) * 100">
+            </div>
+            <!-- Pending trim cut start (vertical line) -->
+            <div *ngIf="pendingCutStart !== null" class="pending-cut-start"
+              [style.left.%]="(pendingCutStart / duration) * 100">
+            </div>
           </div>
           <span class="time-display">{{ formatTime(duration) }}</span>
           <button mat-icon-button (click)="toggleMute()">
             <mat-icon>{{ isMuted ? 'volume_off' : 'volume_up' }}</mat-icon>
           </button>
+        </div>
+
+        <!-- Trim source video panel -->
+        <div class="trim-panel">
+          <div class="trim-header">
+            <h4>Trim source video</h4>
+            <span class="hint">Mark ranges to REMOVE. Saved as a new video in the same subpart.</span>
+          </div>
+          <div class="trim-actions">
+            <button mat-stroked-button (click)="markCutStart()" [disabled]="trimming">
+              <mat-icon>content_cut</mat-icon> Mark cut start
+            </button>
+            <button mat-stroked-button (click)="markCutEnd()" [disabled]="pendingCutStart === null || trimming">
+              <mat-icon>stop</mat-icon> Mark cut end
+            </button>
+            <button mat-flat-button color="warn"
+                    [disabled]="!canSaveTrimmed()"
+                    (click)="saveTrimmed()">
+              <mat-icon>save</mat-icon>
+              <span *ngIf="!trimming">Save trimmed as new video</span>
+              <span *ngIf="trimming">Trimming…</span>
+            </button>
+          </div>
+          <ul class="cut-list" *ngIf="cutRanges.length > 0">
+            <li *ngFor="let c of cutRanges">
+              <span class="cut-range-text">
+                {{ formatTime(c.start) }} → {{ formatTime(c.end) }}
+                <span class="cut-range-dur">({{ formatTime(c.end - c.start) }})</span>
+              </span>
+              <button mat-icon-button (click)="removeCut(c.id)" [disabled]="trimming">
+                <mat-icon>close</mat-icon>
+              </button>
+            </li>
+          </ul>
         </div>
 
         <!-- Segment Actions -->
@@ -277,6 +320,15 @@
           [style.background]="getSegmentColor(segments.length) + '50'"
           [style.borderColor]="getSegmentColor(segments.length)">
           <span class="tl-seg-name">New Segment</span>
+        </div>
+        <!-- Trim cuts on timeline -->
+        <div *ngFor="let c of cutRanges" class="timeline-cut"
+          [style.left.%]="(c.start / duration) * 100"
+          [style.width.%]="((c.end - c.start) / duration) * 100">
+          <span class="tl-cut-name">cut</span>
+        </div>
+        <div *ngIf="pendingCutStart !== null" class="timeline-pending-cut-start"
+          [style.left.%]="(pendingCutStart / duration) * 100">
         </div>
         <!-- Time markers -->
         <div class="time-markers">
