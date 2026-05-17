@@ -24,6 +24,14 @@ export class VideoService {
     return this.http.post(`${this.API}/upload`, formData);
   }
 
+  /**
+   * Trim a source video via DAM and return the trimmed bytes.
+   * Caller is responsible for wrapping the Blob in a File and calling uploadVideo().
+   */
+  trimVideo(videoUrl: string, cutRanges: { start_sec: number; end_sec: number }[]): Observable<Blob> {
+    return this.dam.trimVideo(videoUrl, cutRanges);
+  }
+
   getProjectVideos(projectId: string): Observable<VideoItem[]> {
     return this.http.get<VideoItem[]>(`${this.API}/project/${projectId}`);
   }
