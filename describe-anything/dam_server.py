@@ -44,6 +44,7 @@ import json
 import asyncio
 import tempfile
 import shutil
+import subprocess
 import cv2
 from typing import AsyncGenerator, Generator
 from torchvision import transforms
@@ -122,6 +123,16 @@ class SceneDetectRequest(BaseModel):
     method: Optional[str] = "content"
     threshold: Optional[float] = 27.0
     min_scene_len: Optional[float] = 1.0
+
+
+class CutRange(BaseModel):
+    start_sec: float
+    end_sec: float
+
+
+class TrimRequest(BaseModel):
+    video_url: str
+    cut_ranges: List[CutRange]
 
 
 def fmt_time(seconds: float) -> str:
@@ -731,6 +742,160 @@ async def detect_scenes_endpoint(req: SceneDetectRequest):
                 os.remove(temp_video_path)   # luôn chạy dù crash ở đâu
             except Exception as e:
                 print(f"Warning: Failed to delete temp file {temp_video_path}: {e}")
+
+def _normalize_cuts(cut_ranges: List[CutRange], duration: float) -> List[tuple[float, float]]:
+    """Clamp to [0, duration], drop zero-length / inverted, sort, merge overlaps."""
+    cleaned: List[tuple[float, float]] = []
+    for r in cut_ranges:
+        s = max(0.0, min(r.start_sec, r.end_sec))
+        e = min(duration, max(r.start_sec, r.end_sec))
+        if e - s > 0.001:
+            cleaned.append((s, e))
+    cleaned.sort(key=lambda t: t[0])
+    merged: List[tuple[float, float]] = []
+    for s, e in cleaned:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def _keep_ranges(cuts: List[tuple[float, float]], duration: float) -> List[tuple[float, float]]:
+    """Complement of cuts within [0, duration]."""
+    keep: List[tuple[float, float]] = []
+    cursor = 0.0
+    for s, e in cuts:
+        if s > cursor:
+            keep.append((cursor, s))
+        cursor = e
+    if cursor < duration:
+        keep.append((cursor, duration))
+    return keep
+
+
+def _probe_duration(path: str) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+         "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True
+    )
+    return float(out.stdout.strip())
+
+
+def _has_audio(path: str) -> bool:
+    out = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-select_streams", "a",
+         "-show_entries", "stream=codec_type", "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True
+    )
+    return bool(out.stdout.strip())
+
+
+def _build_filter_complex(keeps: List[tuple[float, float]], with_audio: bool) -> tuple[str, List[str]]:
+    """Build a `-filter_complex` arg and the corresponding `-map` args."""
+    parts: List[str] = []
+    concat_inputs: List[str] = []
+    for i, (s, e) in enumerate(keeps):
+        parts.append(
+            f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}]"
+        )
+        concat_inputs.append(f"[v{i}]")
+        if with_audio:
+            parts.append(
+                f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]"
+            )
+            concat_inputs.append(f"[a{i}]")
+    n = len(keeps)
+    if with_audio:
+        parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=1[outv][outa]")
+        maps = ["-map", "[outv]", "-map", "[outa]"]
+    else:
+        parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=0[outv]")
+        maps = ["-map", "[outv]"]
+    return ";".join(parts), maps
+
+
+@app.post("/trim")
+async def trim_video(req: TrimRequest):
+    if not req.cut_ranges:
+        return JSONResponse(status_code=400, content={"error": "cut_ranges is required"})
+
+    src_path = None
+    out_path = None
+    try:
+        # 1. Download source
+        try:
+            print(f"[trim] Downloading {req.video_url}")
+            r = requests.get(req.video_url, stream=True, timeout=(5, 60))
+            r.raise_for_status()
+        except Exception as e:
+            return JSONResponse(status_code=502, content={"error": f"failed to fetch source video: {e}"})
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            for chunk in r.iter_content(chunk_size=8192):
+                tmp.write(chunk)
+            src_path = tmp.name
+
+        # 2. Probe duration + audio presence
+        try:
+            duration = _probe_duration(src_path)
+            with_audio = _has_audio(src_path)
+        except subprocess.CalledProcessError as e:
+            return JSONResponse(status_code=500, content={"error": f"ffprobe failed: {e.stderr or e}"})
+
+        # 3. Compute keep ranges
+        cuts = _normalize_cuts(req.cut_ranges, duration)
+        keeps = _keep_ranges(cuts, duration)
+        if not keeps:
+            return JSONResponse(status_code=400, content={"error": "nothing left after cuts"})
+
+        # 4. Run ffmpeg
+        filter_str, maps = _build_filter_complex(keeps, with_audio)
+        out_fd, out_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(out_fd)
+        cmd = [
+            "ffmpeg", "-y", "-i", src_path,
+            "-filter_complex", filter_str,
+            *maps,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        ]
+        if with_audio:
+            cmd += ["-c:a", "aac"]
+        cmd.append(out_path)
+
+        print(f"[trim] Running: {' '.join(cmd)}")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            tail = (proc.stderr or "")[-500:]
+            return JSONResponse(status_code=500, content={"error": f"ffmpeg failed: {tail}"})
+
+        # 5. Stream back
+        def file_iter():
+            with open(out_path, "rb") as f:
+                while True:
+                    chunk = f.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+        return StreamingResponse(
+            file_iter(),
+            media_type="video/mp4",
+            headers={"Content-Disposition": 'attachment; filename="trimmed.mp4"'}
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    finally:
+        for p in (src_path, out_path):
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception as e:
+                    print(f"[trim] warning: failed to delete {p}: {e}")
+
 
 @app.get("/health")
 async def health_check():
