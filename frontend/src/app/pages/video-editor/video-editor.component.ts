@@ -29,6 +29,7 @@ import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.comp
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
 import { normalizeCuts, keepRanges, CutRange } from '../../core/utils/cut-ranges';
+import { generateThumbnail } from '../../core/utils/video-thumbnail';
 import { forkJoin } from 'rxjs';
 
 @Component({
@@ -635,22 +636,25 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
           this.snackBar.open('Cannot save: source video has no project', '', { duration: 3000, panelClass: 'snack-error' });
           return;
         }
-        this.videoService.uploadVideo(
-          sourceVideo.project_id,
-          file,
-          sourceVideo.subpart_id,
-          trimmedDuration
-        ).subscribe({
-          next: (res) => {
-            this.trimming = false;
-            this.snackBar
-              .open(`Saved as '${trimmedName}'`, 'Open', { duration: 5000, panelClass: 'snack-success' })
-              .onAction().subscribe(() => this.router.navigate(['/editor', res.id]));
-          },
-          error: () => {
-            this.trimming = false;
-            this.snackBar.open('Trim succeeded but upload failed', '', { duration: 4000, panelClass: 'snack-error' });
-          }
+        generateThumbnail(file).then((thumbnail) => {
+          this.videoService.uploadVideo(
+            sourceVideo.project_id!,
+            file,
+            sourceVideo.subpart_id,
+            trimmedDuration,
+            thumbnail
+          ).subscribe({
+            next: (res) => {
+              this.trimming = false;
+              this.snackBar
+                .open(`Saved as '${trimmedName}'`, 'Open', { duration: 5000, panelClass: 'snack-success' })
+                .onAction().subscribe(() => this.router.navigate(['/editor', res.id]));
+            },
+            error: () => {
+              this.trimming = false;
+              this.snackBar.open('Trim succeeded but upload failed', '', { duration: 4000, panelClass: 'snack-error' });
+            }
+          });
         });
       },
       error: (err) => {
