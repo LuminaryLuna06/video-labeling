@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, send_file, after_this_request
 from datetime import datetime, timezone
 from bson import ObjectId
 from config import Config
@@ -6,8 +6,22 @@ from utils.auth_middleware import token_required
 from routes.settings import get_dam_url
 import base64
 import io
+import os
+import json
+import re
+import subprocess
+import tempfile
+import zipfile
+import shutil
+import threading
+import uuid
+import time
+import logging
 import requests as http_requests
 import traceback
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 annotations_bp = Blueprint('annotations', __name__)
 
@@ -770,3 +784,521 @@ def _build_video_export(video):
         'fps': video.get('fps', 0),
         'segments': segments_data
     }
+
+
+# ============ SEGMENTED VIDEO EXPORT (ZIP with ffmpeg split) ============
+
+def _decode_base64_image(b64_str):
+    """Decode a base64 image string (with optional data URI prefix) to bytes."""
+    if not b64_str:
+        return None
+    if ',' in b64_str:
+        b64_str = b64_str.split(',', 1)[1]
+    try:
+        return base64.b64decode(b64_str)
+    except Exception:
+        return None
+
+
+def _sanitize_name(name):
+    """Sanitize a name for use as folder/file name."""
+    if not name:
+        return 'unnamed'
+    return re.sub(r'[^\w\-]', '_', name).strip('_')[:80] or 'unnamed'
+
+
+@annotations_bp.route('/export/video/<video_id>/segmented', methods=['GET'])
+@token_required
+def export_segmented_video(video_id):
+    """Export video split into segments as a ZIP file with metadata and masks.
+    
+    Each segment is cut using ffmpeg (stream copy, preserves audio).
+    Includes brush_mask and segmented_mask PNGs for each region,
+    plus a metadata.json with ground truth captions for metric evaluation.
+    """
+    try:
+        video = current_app.db.videos.find_one({'_id': ObjectId(video_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid video ID'}), 400
+
+    if not video:
+        return jsonify({'error': 'Video not found'}), 404
+
+    # Get segments
+    segments = list(current_app.db.video_segments.find(
+        {'video_id': ObjectId(video_id)}
+    ).sort('order', 1))
+
+    if not segments:
+        return jsonify({'error': 'No segments found for this video'}), 400
+
+    # Find video file on disk
+    video_path = os.path.join(Config.UPLOAD_FOLDER, 'videos', video['filename'])
+    if not os.path.exists(video_path):
+        return jsonify({'error': 'Video file not found on server'}), 404
+
+    # Create temp directory for building the ZIP contents
+    tmp_dir = tempfile.mkdtemp(prefix='seg_export_')
+    video_name_stem = os.path.splitext(video.get('original_name', 'video'))[0]
+    root_folder = _sanitize_name(video_name_stem) + '_segments'
+    root_path = os.path.join(tmp_dir, root_folder)
+    os.makedirs(root_path, exist_ok=True)
+
+    try:
+        segments_info = []
+
+        for idx, seg in enumerate(segments):
+            seg_folder_name = f"segment_{idx + 1:03d}_{_sanitize_name(seg.get('name', ''))}"
+            seg_dir = os.path.join(root_path, seg_folder_name)
+            os.makedirs(seg_dir, exist_ok=True)
+
+            # Split video using ffmpeg (stream copy = fast, preserves audio)
+            segment_video_path = os.path.join(seg_dir, 'video.mp4')
+            try:
+                result = subprocess.run([
+                    'ffmpeg', '-y',
+                    '-ss', str(seg['start_time']),
+                    '-to', str(seg['end_time']),
+                    '-i', video_path,
+                    '-c', 'copy',
+                    '-avoid_negative_ts', 'make_zero',
+                    segment_video_path
+                ], capture_output=True, timeout=120)
+                if result.returncode != 0:
+                    logger.warning(f"[SegExport] ffmpeg warning for {seg_folder_name}: {result.stderr.decode('utf-8', errors='replace')[-500:]}")
+                else:
+                    logger.info(f"[SegExport] Successfully cut segment {seg_folder_name}")
+            except subprocess.TimeoutExpired:
+                logger.error(f"[SegExport] ffmpeg timeout for {seg_folder_name}")
+            except FileNotFoundError:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                return jsonify({'error': 'ffmpeg not found. Install ffmpeg on the server.'}), 500
+
+            # Get regions for this segment
+            regions = list(current_app.db.object_regions.find({'segment_id': seg['_id']}))
+            regions_info = []
+
+            if regions:
+                regions_dir = os.path.join(seg_dir, 'regions')
+                os.makedirs(regions_dir, exist_ok=True)
+
+                for r_idx, region in enumerate(regions):
+                    region_folder_name = f"region_{r_idx + 1:03d}_{_sanitize_name(region.get('label', ''))}"
+                    region_dir = os.path.join(regions_dir, region_folder_name)
+                    os.makedirs(region_dir, exist_ok=True)
+
+                    has_brush = False
+                    has_segmented = False
+
+                    # Save brush mask
+                    brush_bytes = _decode_base64_image(region.get('brush_mask', ''))
+                    if brush_bytes:
+                        with open(os.path.join(region_dir, 'brush_mask.png'), 'wb') as f:
+                            f.write(brush_bytes)
+                        has_brush = True
+
+                    # Save segmented mask
+                    seg_mask_bytes = _decode_base64_image(region.get('segmented_mask', ''))
+                    if seg_mask_bytes:
+                        with open(os.path.join(region_dir, 'segmented_mask.png'), 'wb') as f:
+                            f.write(seg_mask_bytes)
+                        has_segmented = True
+
+                    # Get region caption
+                    caption = current_app.db.captions.find_one({'region_id': region['_id']})
+                    gt_captions = {}
+                    if caption:
+                        gt_captions = {
+                            'visual_en': caption.get('visual_caption', ''),
+                            'visual_vi': caption.get('visual_caption_vi', ''),
+                            'combined_en': caption.get('combined_caption', ''),
+                            'combined_vi': caption.get('combined_caption_vi', ''),
+                            'knowledge_en': caption.get('knowledge_caption', ''),
+                            'knowledge_vi': caption.get('knowledge_caption_vi', ''),
+                        }
+
+                    regions_info.append({
+                        'id': str(region['_id']),
+                        'label': region.get('label', ''),
+                        'folder': region_folder_name,
+                        'color': region.get('color', ''),
+                        'category': region.get('category_name', ''),
+                        'frame_time': region.get('frame_time', 0),
+                        'has_brush_mask': has_brush,
+                        'has_segmented_mask': has_segmented,
+                        'ground_truth_captions': gt_captions
+                    })
+
+            # Get segment-level caption
+            seg_caption = current_app.db.captions.find_one({
+                'segment_id': seg['_id'],
+                'region_id': None
+            })
+            seg_gt_captions = {}
+            if seg_caption:
+                seg_gt_captions = {
+                    'contextual_en': seg_caption.get('contextual_caption', ''),
+                    'contextual_vi': seg_caption.get('contextual_caption_vi', ''),
+                    'combined_en': seg_caption.get('combined_caption', ''),
+                    'combined_vi': seg_caption.get('combined_caption_vi', ''),
+                    'knowledge_en': seg_caption.get('knowledge_caption', ''),
+                    'knowledge_vi': seg_caption.get('knowledge_caption_vi', ''),
+                }
+
+            segments_info.append({
+                'id': str(seg['_id']),
+                'name': seg.get('name', ''),
+                'folder': seg_folder_name,
+                'start_time': seg['start_time'],
+                'end_time': seg['end_time'],
+                'duration': round(seg['end_time'] - seg['start_time'], 3),
+                'ground_truth_captions': {
+                    'segment_level': seg_gt_captions
+                },
+                'regions': regions_info
+            })
+
+        # Write metadata.json
+        metadata = {
+            'video_name': video.get('original_name', ''),
+            'video_id': str(video['_id']),
+            'duration': video.get('duration', 0),
+            'width': video.get('width', 0),
+            'height': video.get('height', 0),
+            'fps': video.get('fps', 0),
+            'export_date': datetime.now(timezone.utc).isoformat() + 'Z',
+            'total_segments': len(segments_info),
+            'total_regions': sum(len(s['regions']) for s in segments_info),
+            'segments': segments_info
+        }
+
+        metadata_path = os.path.join(root_path, 'metadata.json')
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+        # Create ZIP file
+        zip_path = os.path.join(tmp_dir, f'{_sanitize_name(video_name_stem)}_segments.zip')
+        with zipfile.ZipFile(zip_path, 'w') as zf:
+            for dirpath, dirnames, filenames in os.walk(root_path):
+                for filename in filenames:
+                    file_path = os.path.join(dirpath, filename)
+                    arcname = os.path.relpath(file_path, tmp_dir)
+                    # Use ZIP_STORED for video files (already compressed), ZIP_DEFLATED for text
+                    compress = zipfile.ZIP_STORED if filename.endswith(('.mp4', '.png')) else zipfile.ZIP_DEFLATED
+                    zf.write(file_path, arcname, compress_type=compress)
+
+        # Schedule cleanup after response is sent
+        @after_this_request
+        def cleanup(response):
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            return response
+
+        download_name = f'{_sanitize_name(video_name_stem)}_segments.zip'
+        return send_file(
+            zip_path,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name=download_name
+        )
+
+    except Exception as e:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        logger.error(f"Failed to export segmented video: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'error': f'Failed to export segmented video: {str(e)}'}), 500
+
+
+# ============ BATCH SEGMENTED VIDEO EXPORT ============
+
+def process_batch_segmented_export(app, task_id, project_id, subpart_id=None):
+    with app.app_context():
+        try:
+            db = current_app.db
+            task = db.export_tasks.find_one({'_id': task_id})
+            if not task:
+                return
+
+            export_dir = os.path.join(current_app.root_path, 'uploads', 'exports')
+            os.makedirs(export_dir, exist_ok=True)
+            
+            project = db.projects.find_one({'_id': ObjectId(project_id)})
+            if not project:
+                db.export_tasks.update_one({'_id': task_id}, {'$set': {'status': 'failed', 'error': 'Project not found'}})
+                return
+
+            zip_filename = f"segments_export_{project_id}_{int(time.time())}.zip"
+            zip_filepath = os.path.join(export_dir, zip_filename)
+
+            query = {'project_id': ObjectId(project_id)}
+            if subpart_id:
+                query['subpart_id'] = ObjectId(subpart_id)
+                
+            videos = list(db.videos.find(query))
+            
+            # Filter out videos without segments
+            valid_videos = []
+            for video in videos:
+                if db.video_segments.count_documents({'video_id': video['_id']}) > 0:
+                    valid_videos.append(video)
+
+            total_videos = len(valid_videos)
+            if total_videos == 0:
+                with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_STORED) as zipf:
+                    zipf.writestr("metadata.json", json.dumps({"project_id": str(project_id), "videos": []}))
+                db.export_tasks.update_one({'_id': task_id}, {'$set': {'status': 'completed', 'progress': 100, 'file_path': zip_filepath}})
+                return
+
+            subparts = list(db.subparts.find({'project_id': ObjectId(project_id)}))
+            subpart_map = {str(sp['_id']): sp.get('name', f"Subpart_{sp['_id']}") for sp in subparts}
+
+            processed_count = 0
+            
+            tmp_dir = tempfile.mkdtemp(prefix='batch_seg_export_')
+            root_folder = _sanitize_name(project.get('name', 'Project')) + '_segments'
+            root_path = os.path.join(tmp_dir, root_folder)
+            os.makedirs(root_path, exist_ok=True)
+            
+            project_metadata = {
+                'project_name': project.get('name', ''),
+                'project_id': str(project['_id']),
+                'export_date': datetime.now(timezone.utc).isoformat() + 'Z',
+                'videos': []
+            }
+
+            for video in valid_videos:
+                try:
+                    target_subpart_id = str(video.get('subpart_id', 'Unassigned'))
+                    folder_name = _sanitize_name(subpart_map.get(target_subpart_id, "Unassigned"))
+                    
+                    subpart_dir = os.path.join(root_path, folder_name)
+                    os.makedirs(subpart_dir, exist_ok=True)
+                    
+                    video_name_stem = os.path.splitext(video.get('original_name', 'video'))[0]
+                    video_dir = os.path.join(subpart_dir, _sanitize_name(video_name_stem) + '_segments')
+                    os.makedirs(video_dir, exist_ok=True)
+                    
+                    video_path = os.path.join(Config.UPLOAD_FOLDER, 'videos', video['filename'])
+                    if not os.path.exists(video_path):
+                        continue
+
+                    segments = list(db.video_segments.find({'video_id': video['_id']}).sort('order', 1))
+                    segments_info = []
+
+                    for idx, seg in enumerate(segments):
+                        seg_folder_name = f"segment_{idx + 1:03d}_{_sanitize_name(seg.get('name', ''))}"
+                        seg_dir = os.path.join(video_dir, seg_folder_name)
+                        os.makedirs(seg_dir, exist_ok=True)
+
+                        segment_video_path = os.path.join(seg_dir, 'video.mp4')
+                        try:
+                            result = subprocess.run([
+                                'ffmpeg', '-y',
+                                '-ss', str(seg['start_time']),
+                                '-to', str(seg['end_time']),
+                                '-i', video_path,
+                                '-c', 'copy',
+                                '-avoid_negative_ts', 'make_zero',
+                                segment_video_path
+                            ], capture_output=True, timeout=120)
+                            if result.returncode != 0:
+                                logger.warning(f"[BatchSegExport] ffmpeg warning for {seg_folder_name}: {result.stderr.decode('utf-8', errors='replace')[-500:]}")
+                        except Exception as e:
+                            logger.error(f"[BatchSegExport] Error cutting {seg_folder_name}: {str(e)}")
+                            continue
+
+                        regions = list(db.object_regions.find({'segment_id': seg['_id']}))
+                        regions_info = []
+
+                        if regions:
+                            regions_dir = os.path.join(seg_dir, 'regions')
+                            os.makedirs(regions_dir, exist_ok=True)
+
+                            for r_idx, region in enumerate(regions):
+                                region_folder_name = f"region_{r_idx + 1:03d}_{_sanitize_name(region.get('label', ''))}"
+                                region_dir = os.path.join(regions_dir, region_folder_name)
+                                os.makedirs(region_dir, exist_ok=True)
+
+                                brush_bytes = _decode_base64_image(region.get('brush_mask', ''))
+                                if brush_bytes:
+                                    with open(os.path.join(region_dir, 'brush_mask.png'), 'wb') as f:
+                                        f.write(brush_bytes)
+
+                                seg_mask_bytes = _decode_base64_image(region.get('segmented_mask', ''))
+                                if seg_mask_bytes:
+                                    with open(os.path.join(region_dir, 'segmented_mask.png'), 'wb') as f:
+                                        f.write(seg_mask_bytes)
+
+                                caption = db.captions.find_one({'region_id': region['_id']})
+                                gt_captions = {}
+                                if caption:
+                                    gt_captions = {
+                                        'visual_en': caption.get('visual_caption', ''),
+                                        'visual_vi': caption.get('visual_caption_vi', ''),
+                                        'combined_en': caption.get('combined_caption', ''),
+                                        'combined_vi': caption.get('combined_caption_vi', ''),
+                                        'knowledge_en': caption.get('knowledge_caption', ''),
+                                        'knowledge_vi': caption.get('knowledge_caption_vi', ''),
+                                    }
+
+                                regions_info.append({
+                                    'id': str(region['_id']),
+                                    'label': region.get('label', ''),
+                                    'folder': region_folder_name,
+                                    'ground_truth_captions': gt_captions
+                                })
+
+                        seg_caption = db.captions.find_one({'segment_id': seg['_id'], 'region_id': None})
+                        seg_gt_captions = {}
+                        if seg_caption:
+                            seg_gt_captions = {
+                                'contextual_en': seg_caption.get('contextual_caption', ''),
+                                'contextual_vi': seg_caption.get('contextual_caption_vi', ''),
+                                'combined_en': seg_caption.get('combined_caption', ''),
+                                'combined_vi': seg_caption.get('combined_caption_vi', ''),
+                                'knowledge_en': seg_caption.get('knowledge_caption', ''),
+                                'knowledge_vi': seg_caption.get('knowledge_caption_vi', ''),
+                            }
+
+                        segments_info.append({
+                            'id': str(seg['_id']),
+                            'name': seg.get('name', ''),
+                            'folder': seg_folder_name,
+                            'start_time': seg['start_time'],
+                            'end_time': seg['end_time'],
+                            'ground_truth_captions': {'segment_level': seg_gt_captions},
+                            'regions': regions_info
+                        })
+
+                    video_metadata = {
+                        'video_name': video.get('original_name', ''),
+                        'video_id': str(video['_id']),
+                        'folder': _sanitize_name(video_name_stem) + '_segments',
+                        'subpart': target_subpart_id,
+                        'total_segments': len(segments_info),
+                        'segments': segments_info
+                    }
+                    project_metadata['videos'].append(video_metadata)
+
+                    processed_count += 1
+                    progress = int((processed_count / total_videos) * 80)
+                    db.export_tasks.update_one({'_id': task_id}, {'$set': {'progress': progress}})
+                    logger.info(f"Processed {processed_count}/{total_videos} videos for task {task_id}")
+
+                except Exception as e:
+                    logger.error(f"Error processing video {video['_id']}: {str(e)}")
+
+            # Write project metadata
+            db.export_tasks.update_one({'_id': task_id}, {'$set': {'progress': 85}})
+            metadata_path = os.path.join(root_path, 'metadata.json')
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(project_metadata, f, indent=2, ensure_ascii=False)
+
+            # Zip everything
+            db.export_tasks.update_one({'_id': task_id}, {'$set': {'progress': 90}})
+            with zipfile.ZipFile(zip_filepath, 'w') as zf:
+                for dirpath, dirnames, filenames in os.walk(root_path):
+                    for filename in filenames:
+                        file_path = os.path.join(dirpath, filename)
+                        arcname = os.path.relpath(file_path, tmp_dir)
+                        compress = zipfile.ZIP_STORED if filename.endswith(('.mp4', '.png')) else zipfile.ZIP_DEFLATED
+                        zf.write(file_path, arcname, compress_type=compress)
+
+            # Cleanup tmp_dir
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+            db.export_tasks.update_one({
+                '_id': task_id
+            }, {
+                '$set': {
+                    'status': 'completed',
+                    'progress': 100,
+                    'file_path': zip_filepath
+                }
+            })
+            logger.info(f"Batch segmented export completed for task {task_id}")
+
+        except Exception as e:
+            logger.error(f"Export task failed: {str(e)}")
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except:
+                pass
+            db.export_tasks.update_one({'_id': task_id}, {'$set': {'status': 'failed', 'error': str(e)}})
+
+
+@annotations_bp.route('/export/project/<project_id>/segmented/start', methods=['POST'])
+@token_required
+def start_batch_segmented_export(project_id):
+    try:
+        project = current_app.db.projects.find_one({'_id': ObjectId(project_id)})
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+            
+        subpart_id = request.args.get('subpart_id')
+
+        task_id = str(uuid.uuid4())
+        current_app.db.export_tasks.insert_one({
+            '_id': task_id,
+            'project_id': project_id,
+            'user_id': str(request.current_user['_id']),
+            'status': 'processing',
+            'progress': 0,
+            'file_path': None,
+            'created_at': datetime.now(timezone.utc),
+            'type': 'segmented'
+        })
+
+        app = current_app._get_current_object()
+        thread = threading.Thread(target=process_batch_segmented_export, args=(app, task_id, project_id, subpart_id))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({'task_id': task_id}), 200
+
+    except Exception as e:
+        logger.error(f"Failed to start task: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@annotations_bp.route('/export/segmented/status/<task_id>', methods=['GET'])
+@token_required
+def check_batch_segmented_export(task_id):
+    try:
+        task = current_app.db.export_tasks.find_one({'_id': task_id})
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+            
+        if task.get('user_id') != str(request.current_user['_id']):
+            return jsonify({'error': 'Unauthorized'}), 403
+
+        return jsonify({
+            'task_id': task['_id'],
+            'status': task.get('status'),
+            'progress': task.get('progress', 0),
+            'error': task.get('error')
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@annotations_bp.route('/export/segmented/download/<task_id>', methods=['GET'])
+def download_batch_segmented_export(task_id):
+    try:
+        task = current_app.db.export_tasks.find_one({'_id': task_id})
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+
+        if task.get('status') != 'completed':
+            return jsonify({'error': 'Task not completed yet'}), 400
+
+        file_path = task.get('file_path')
+        if not file_path or not os.path.exists(file_path):
+            return jsonify({'error': 'File not found on server'}), 404
+
+        filename = os.path.basename(file_path)
+        return send_file(file_path, as_attachment=True, download_name=filename)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

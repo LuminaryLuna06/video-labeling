@@ -150,6 +150,12 @@ export class VideoService {
     return this.http.get(`${this.ANNOTATIONS_API}/export/project/${projectId}`);
   }
 
+  downloadSegmentedVideo(videoId: string): Observable<Blob> {
+    return this.http.get(`${this.ANNOTATIONS_API}/export/video/${videoId}/segmented`, {
+      responseType: 'blob'
+    });
+  }
+
   // ---- DAM Auto-Caption (Video: 8 frames) ----
   generateCaption(frames: string[], maskImage: string, captionType: 'visual' | 'contextual'): Observable<{ caption: string; caption_type: string }> {
     return this.dam.generateCaption(frames, maskImage, captionType);
