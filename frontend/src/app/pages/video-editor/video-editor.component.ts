@@ -2222,6 +2222,28 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  downloadVideoFile(): void {
+    if (!this.video?.url) return;
+    const name = this.video.original_name || 'video.mp4';
+    this.snackBar.open('Preparing download...', '', { duration: 1500 });
+    fetch(this.video.url)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.blob();
+      })
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(() => {
+        this.snackBar.open('Failed to download video', '', { duration: 3000, panelClass: 'snack-error' });
+      });
+  }
+
   exportAnnotations(): void {
     if (!this.video) return;
     this.videoService.exportAnnotations(this.video.id).subscribe({
