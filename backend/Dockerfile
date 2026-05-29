@@ -2,9 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System dependencies for Pillow/OpenCV runtime
+# System dependencies for Pillow/OpenCV runtime + ffmpeg for video splitting
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libglib2.0-0 libgl1 \
+    gcc libglib2.0-0 libgl1 ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

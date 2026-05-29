@@ -2263,6 +2263,30 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
+  downloadSegmentedVideo(): void {
+    if (!this.video) return;
+    if (!this.segments || this.segments.length === 0) {
+      this.snackBar.open('No segments to export. Create segments first.', '', { duration: 3000, panelClass: 'snack-error' });
+      return;
+    }
+    this.snackBar.open('Preparing segmented video... please wait', '', { duration: 10000 });
+    this.videoService.downloadSegmentedVideo(this.video.id).subscribe({
+      next: (blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const videoName = this.video!.original_name?.replace(/\.[^.]+$/, '') || 'video';
+        a.download = `${videoName}_segments.zip`;
+        a.click();
+        URL.revokeObjectURL(url);
+        this.snackBar.open('Segmented video downloaded!', '', { duration: 2000, panelClass: 'snack-success' });
+      },
+      error: () => {
+        this.snackBar.open('Failed to download segmented video. Make sure ffmpeg is available on the server.', '', { duration: 5000, panelClass: 'snack-error' });
+      }
+    });
+  }
+
   onSegmentKBSelectionChange(nodes: any[]): void {
     this.segmentCaptionKBIds = this.normalizeKbIds(nodes);
   }
