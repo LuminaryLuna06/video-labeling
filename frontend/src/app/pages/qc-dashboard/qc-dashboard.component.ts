@@ -18,15 +18,18 @@ import { AuthService } from '../../core/services/auth.service';
 import { SettingsService } from '../../core/services/settings.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 
+interface VideoStatusCounts {
+  not_submitted: number;
+  pending_review: number;
+  in_review: number;
+  approved: number;
+  rejected: number;
+}
+
 interface QCStats {
   total_videos: number;
-  by_status: {
-    pending: number;
-    approved: number;
-    rejected: number;
-    in_review: number;
-  };
-  by_project: { [key: string]: { total: number; approved: number; rejected: number; pending: number; in_review: number } };
+  by_status: VideoStatusCounts;
+  by_project: { [key: string]: VideoStatusCounts & { total: number } };
   by_user: UserStats[];
   recent_reviews: ReviewItem[];
   pending_reviews: PendingReviewItem[];
@@ -178,23 +181,38 @@ export class QcDashboardComponent implements OnInit {
     this.loadImageStats();
   }
 
-  get projectStats(): { name: string; total: number; approved: number; rejected: number; pending: number; in_review: number; approvalRate: number }[] {
+  get projectStats(): {
+    name: string;
+    total: number;
+    not_submitted: number;
+    pending_review: number;
+    in_review: number;
+    approved: number;
+    rejected: number;
+    approvalRate: number;
+  }[] {
     if (!this.stats) return [];
-    return Object.entries(this.stats.by_project).map(([name, data]) => ({
-      name,
-      ...data,
-      approvalRate: data.total > 0 ? Math.round((data.approved / data.total) * 100) : 0
-    })).sort((a, b) => b.total - a.total);
+    return Object.entries(this.stats.by_project).map(([name, data]) => {
+      const decided = data.approved + data.rejected;
+      return {
+        name,
+        ...data,
+        approvalRate: decided > 0 ? Math.round((data.approved / decided) * 100) : 0
+      };
+    }).sort((a, b) => b.total - a.total);
   }
 
+  /** Rate over items that already have a final decision (approved + rejected). */
   get approvalRate(): number {
-    if (!this.stats || this.stats.total_videos === 0) return 0;
-    return Math.round((this.stats.by_status.approved / this.stats.total_videos) * 100);
+    if (!this.stats) return 0;
+    const decided = this.stats.by_status.approved + this.stats.by_status.rejected;
+    return decided > 0 ? Math.round((this.stats.by_status.approved / decided) * 100) : 0;
   }
 
   get rejectionRate(): number {
-    if (!this.stats || this.stats.total_videos === 0) return 0;
-    return Math.round((this.stats.by_status.rejected / this.stats.total_videos) * 100);
+    if (!this.stats) return 0;
+    const decided = this.stats.by_status.approved + this.stats.by_status.rejected;
+    return decided > 0 ? Math.round((this.stats.by_status.rejected / decided) * 100) : 0;
   }
 
   // Image Stats

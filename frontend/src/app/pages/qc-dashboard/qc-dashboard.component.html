@@ -98,10 +98,13 @@
         <div class="stat-info">
           <span class="stat-value">{{ stats.by_status.approved }}</span>
           <span class="stat-label">Approved</span>
-          <span class="stat-percent">{{ approvalRate }}%</span>
+          <span class="stat-percent"
+                matTooltip="Tỉ lệ trên tổng số video đã có quyết định (approved + rejected)">
+            {{ approvalRate }}%
+          </span>
         </div>
       </div>
-      
+
       <div class="stat-card rejected">
         <div class="stat-icon">
           <mat-icon>cancel</mat-icon>
@@ -109,10 +112,13 @@
         <div class="stat-info">
           <span class="stat-value">{{ stats.by_status.rejected }}</span>
           <span class="stat-label">Rejected</span>
-          <span class="stat-percent">{{ rejectionRate }}%</span>
+          <span class="stat-percent"
+                matTooltip="Tỉ lệ trên tổng số video đã có quyết định (approved + rejected)">
+            {{ rejectionRate }}%
+          </span>
         </div>
       </div>
-      
+
       <div class="stat-card in-review">
         <div class="stat-icon">
           <mat-icon>pending</mat-icon>
@@ -122,14 +128,24 @@
           <span class="stat-label">In Review</span>
         </div>
       </div>
-      
+
+      <div class="stat-card pending">
+        <div class="stat-icon">
+          <mat-icon>hourglass_empty</mat-icon>
+        </div>
+        <div class="stat-info">
+          <span class="stat-value">{{ stats.by_status.pending_review }}</span>
+          <span class="stat-label">Pending Review</span>
+        </div>
+      </div>
+
       <div class="stat-card pending">
         <div class="stat-icon">
           <mat-icon>schedule</mat-icon>
         </div>
         <div class="stat-info">
-          <span class="stat-value">{{ stats.by_status.pending }}</span>
-          <span class="stat-label">Pending</span>
+          <span class="stat-value">{{ stats.by_status.not_submitted }}</span>
+          <span class="stat-label">Not Submitted</span>
         </div>
       </div>
     </div>
@@ -146,8 +162,9 @@
               <th class="center">Approved</th>
               <th class="center">Rejected</th>
               <th class="center">In Review</th>
-              <th class="center">Pending</th>
-              <th>Approval Rate</th>
+              <th class="center">Pending Review</th>
+              <th class="center">Not Submitted</th>
+              <th matTooltip="Approved / (Approved + Rejected)">Approval Rate</th>
             </tr>
           </thead>
           <tbody>
@@ -157,7 +174,8 @@
               <td class="center approved">{{ project.approved }}</td>
               <td class="center rejected">{{ project.rejected }}</td>
               <td class="center in-review">{{ project.in_review }}</td>
-              <td class="center pending">{{ project.pending }}</td>
+              <td class="center pending">{{ project.pending_review }}</td>
+              <td class="center pending">{{ project.not_submitted }}</td>
               <td>
                 <div class="progress-bar">
                   <div class="progress-fill" [style.width.%]="project.approvalRate"></div>
