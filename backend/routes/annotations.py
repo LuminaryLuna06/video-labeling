@@ -1302,3 +1302,219 @@ def download_batch_segmented_export(task_id):
         return send_file(file_path, as_attachment=True, download_name=filename)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ============ LABELED VIDEOS + ANNOTATIONS EXPORT ============
+# Exports full original videos (no ffmpeg split) for videos that have >=1 segment,
+# grouped by subpart, with a single metadata.json at the root.
+
+def _cleanup_old_labeled_exports(export_dir):
+    """Delete export zip files older than 24h to free disk space."""
+    if not os.path.exists(export_dir):
+        return
+    now = time.time()
+    for filename in os.listdir(export_dir):
+        if not filename.endswith('.zip'):
+            continue
+        filepath = os.path.join(export_dir, filename)
+        try:
+            if os.path.isfile(filepath) and (now - os.path.getmtime(filepath)) > 24 * 3600:
+                os.remove(filepath)
+        except Exception as e:
+            logger.warning(f"[LabeledExport] Failed to cleanup {filepath}: {e}")
+
+
+def process_batch_labeled_videos_export(app, task_id, project_id, subpart_id=None):
+    """Background thread: build ZIP of original videos that have segments + metadata.json."""
+    tmp_dir = None
+    with app.app_context():
+        try:
+            db = current_app.db
+            task = db.export_tasks.find_one({'_id': task_id})
+            if not task:
+                return
+
+            export_dir = os.path.join(current_app.root_path, 'uploads', 'exports')
+            os.makedirs(export_dir, exist_ok=True)
+            _cleanup_old_labeled_exports(export_dir)
+
+            project = db.projects.find_one({'_id': ObjectId(project_id)})
+            if not project:
+                db.export_tasks.update_one(
+                    {'_id': task_id},
+                    {'$set': {'status': 'failed', 'error': 'Project not found'}}
+                )
+                return
+
+            zip_filename = f"labeled_videos_{project_id}_{int(time.time())}.zip"
+            zip_filepath = os.path.join(export_dir, zip_filename)
+
+            query = {'project_id': ObjectId(project_id)}
+            if subpart_id:
+                query['subpart_id'] = ObjectId(subpart_id)
+            videos = list(db.videos.find(query))
+
+            # Keep only videos that have at least one segment
+            valid_videos = [
+                v for v in videos
+                if db.video_segments.count_documents({'video_id': v['_id']}) > 0
+            ]
+            total_videos = len(valid_videos)
+
+            # Empty case: still produce a valid zip with empty metadata
+            if total_videos == 0:
+                with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_STORED) as zipf:
+                    zipf.writestr(
+                        'metadata.json',
+                        json.dumps({
+                            'project_id': str(project_id),
+                            'project_name': project.get('name', ''),
+                            'export_date': datetime.now(timezone.utc).isoformat() + 'Z',
+                            'total_videos': 0,
+                            'videos': []
+                        }, indent=2, ensure_ascii=False)
+                    )
+                db.export_tasks.update_one(
+                    {'_id': task_id},
+                    {'$set': {'status': 'completed', 'progress': 100, 'file_path': zip_filepath}}
+                )
+                return
+
+            subparts = list(db.subparts.find({'project_id': ObjectId(project_id)}))
+            subpart_map = {str(sp['_id']): sp.get('name', f"Subpart_{sp['_id']}") for sp in subparts}
+
+            tmp_dir = tempfile.mkdtemp(prefix='batch_labeled_videos_')
+            root_folder = _sanitize_name(project.get('name', 'Project')) + '_labeled_videos'
+            root_path = os.path.join(tmp_dir, root_folder)
+            os.makedirs(root_path, exist_ok=True)
+
+            project_metadata = {
+                'project_name': project.get('name', ''),
+                'project_id': str(project['_id']),
+                'export_date': datetime.now(timezone.utc).isoformat() + 'Z',
+                'total_videos': total_videos,
+                'videos': []
+            }
+
+            processed_count = 0
+            for video in valid_videos:
+                try:
+                    target_subpart_id = str(video.get('subpart_id', 'Unassigned'))
+                    subpart_name = _sanitize_name(subpart_map.get(target_subpart_id, 'Unassigned'))
+                    subpart_dir = os.path.join(root_path, subpart_name)
+                    os.makedirs(subpart_dir, exist_ok=True)
+
+                    video_path = os.path.join(Config.UPLOAD_FOLDER, 'videos', video['filename'])
+                    if not os.path.exists(video_path):
+                        logger.warning(f"[LabeledExport] Skipping missing video file: {video_path}")
+                        processed_count += 1
+                        continue
+
+                    # Copy original video preserving its original name (sanitized)
+                    original_name = video.get('original_name') or video.get('filename')
+                    base, ext = os.path.splitext(original_name)
+                    safe_name = _sanitize_name(base) + (ext if ext else '')
+                    dest_path = os.path.join(subpart_dir, safe_name)
+                    shutil.copy(video_path, dest_path)
+
+                    # Build per-video metadata
+                    segments = list(
+                        db.video_segments.find({'video_id': video['_id']}).sort('order', 1)
+                    )
+                    segments_info = []
+                    for seg in segments:
+                        seg_caption = db.captions.find_one({
+                            'segment_id': seg['_id'],
+                            'region_id': None
+                        })
+                        gt = {}
+                        if seg_caption:
+                            gt = {
+                                'contextual_en': seg_caption.get('contextual_caption', ''),
+                                'contextual_vi': seg_caption.get('contextual_caption_vi', ''),
+                                'combined_en': seg_caption.get('combined_caption', ''),
+                                'combined_vi': seg_caption.get('combined_caption_vi', ''),
+                                'knowledge_en': seg_caption.get('knowledge_caption', ''),
+                                'knowledge_vi': seg_caption.get('knowledge_caption_vi', ''),
+                            }
+                        segments_info.append({
+                            'id': str(seg['_id']),
+                            'name': seg.get('name', ''),
+                            'start_time': seg['start_time'],
+                            'end_time': seg['end_time'],
+                            'duration': round(seg['end_time'] - seg['start_time'], 3),
+                            'ground_truth_captions': {'segment_level': gt}
+                        })
+
+                    project_metadata['videos'].append({
+                        'video_id': str(video['_id']),
+                        'video_name': video.get('original_name', ''),
+                        'subpart': subpart_map.get(target_subpart_id, 'Unassigned'),
+                        'path': f"{subpart_name}/{safe_name}",
+                        'duration': video.get('duration', 0),
+                        'width': video.get('width', 0),
+                        'height': video.get('height', 0),
+                        'fps': video.get('fps', 0),
+                        'total_segments': len(segments_info),
+                        'segments': segments_info
+                    })
+
+                    processed_count += 1
+                    progress = int((processed_count / total_videos) * 90)
+                    db.export_tasks.update_one(
+                        {'_id': task_id},
+                        {'$set': {'progress': progress}}
+                    )
+                    logger.info(
+                        f"[LabeledExport] Processed {processed_count}/{total_videos} for task {task_id}"
+                    )
+                except Exception as e:
+                    logger.error(f"[LabeledExport] Error processing video {video.get('_id')}: {e}")
+
+            # Write metadata.json
+            db.export_tasks.update_one({'_id': task_id}, {'$set': {'progress': 92}})
+            with open(os.path.join(root_path, 'metadata.json'), 'w', encoding='utf-8') as f:
+                json.dump(project_metadata, f, indent=2, ensure_ascii=False)
+
+            # Zip everything (ZIP_STORED for .mp4, ZIP_DEFLATED for .json)
+            db.export_tasks.update_one({'_id': task_id}, {'$set': {'progress': 95}})
+            with zipfile.ZipFile(zip_filepath, 'w') as zf:
+                for dirpath, _, filenames in os.walk(root_path):
+                    for filename in filenames:
+                        file_path = os.path.join(dirpath, filename)
+                        arcname = os.path.relpath(file_path, tmp_dir)
+                        compress = (
+                            zipfile.ZIP_STORED
+                            if filename.lower().endswith('.mp4')
+                            else zipfile.ZIP_DEFLATED
+                        )
+                        zf.write(file_path, arcname, compress_type=compress)
+
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            tmp_dir = None
+
+            db.export_tasks.update_one(
+                {'_id': task_id},
+                {'$set': {
+                    'status': 'completed',
+                    'progress': 100,
+                    'file_path': zip_filepath
+                }}
+            )
+            logger.info(f"[LabeledExport] Completed for task {task_id}")
+
+        except Exception as e:
+            logger.error(f"[LabeledExport] Task {task_id} failed: {e}")
+            traceback.print_exc()
+            try:
+                if tmp_dir:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+            try:
+                current_app.db.export_tasks.update_one(
+                    {'_id': task_id},
+                    {'$set': {'status': 'failed', 'error': str(e)}}
+                )
+            except Exception:
+                pass
