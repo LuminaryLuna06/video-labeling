@@ -1116,8 +1116,16 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
           this.isExporting = false;
           if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
 
+          // Anchor click instead of window.open: avoids popup blocker after
+          // transient user activation expires during long-running export.
           const downloadUrl = this.videoService.getBatchSegmentedExportDownloadUrl(taskId);
-          window.open(downloadUrl, '_blank');
+          const a = document.createElement('a');
+          a.href = downloadUrl;
+          a.download = '';
+          a.style.display = 'none';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
         } else if (res.status === 'failed') {
           this.exportStatusText = 'Lỗi cắt clip: ' + (res.error || 'Server error');
           this.isExporting = false;
