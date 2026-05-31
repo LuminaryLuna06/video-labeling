@@ -44,6 +44,7 @@ import json
 import asyncio
 import tempfile
 import shutil
+import subprocess
 import cv2
 from typing import AsyncGenerator, Generator
 from torchvision import transforms
@@ -122,6 +123,16 @@ class SceneDetectRequest(BaseModel):
     method: Optional[str] = "content"
     threshold: Optional[float] = 27.0
     min_scene_len: Optional[float] = 1.0
+
+
+class CutRange(BaseModel):
+    start_sec: float
+    end_sec: float
+
+
+class TrimRequest(BaseModel):
+    video_url: str
+    cut_ranges: List[CutRange]
 
 
 def fmt_time(seconds: float) -> str:
@@ -218,25 +229,66 @@ def get_dinov2_embedding(image: PILImage.Image, mask: PILImage.Image = None) -> 
     return embedding.cpu().numpy().flatten()
 
 
+def _try_compile(module, label: str, mode: str = "reduce-overhead", fullgraph: bool = False):
+    """Wrap a nn.Module with torch.compile (Triton backend via TorchInductor).
+    Returns the compiled module on success, the original module on failure.
+    First call after compile takes 30-120s for kernel warmup."""
+    if module is None:
+        return module
+    try:
+        compiled = torch.compile(module, mode=mode, fullgraph=fullgraph, dynamic=True)
+        print(f"[compile] {label}: torch.compile enabled (mode={mode}, fullgraph={fullgraph})")
+        return compiled
+    except Exception as e:
+        print(f"[compile] {label}: failed, falling back to eager. Error: {e}")
+        return module
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global dam, sam2_predictor, dinov2_model, dinov2_transform
-    
-    disable_torch_init()
-    prompt_modes = {
-        "focal_prompt": "full+focal_crop",
-    }
-    dam = DescribeAnythingModel(
-        model_path=app.args.model_path,
-        conv_mode=app.args.conv_mode,
-        prompt_mode=prompt_modes[app.args.prompt_mode],
-    )
-    print(f"Model {dam.model_name} loaded successfully.")
+
+    do_compile = getattr(app.args, 'compile', False)
+    compile_mode = getattr(app.args, 'compile_mode', 'reduce-overhead')
+    if do_compile:
+        print(f"[compile] torch.compile ENABLED (mode={compile_mode}). "
+              f"First inference will be slow (30-120s warmup per model).")
+
+    if app.args.model_path:
+        disable_torch_init()
+        prompt_modes = {
+            "focal_prompt": "full+focal_crop",
+        }
+        dam = DescribeAnythingModel(
+            model_path=app.args.model_path,
+            conv_mode=app.args.conv_mode,
+            prompt_mode=prompt_modes[app.args.prompt_mode],
+        )
+        print(f"Model {dam.model_name} loaded successfully.")
+
+        if do_compile:
+            # DAM wraps an HF transformers model; the LLM is typically at dam.model
+            # or dam.model.language_model. fullgraph=False because generation loops graph-break.
+            target = getattr(dam, 'model', None)
+            if target is not None:
+                lm = getattr(target, 'language_model', None) or target
+                wrapped = _try_compile(lm, label="DAM language model", mode=compile_mode, fullgraph=False)
+                if getattr(target, 'language_model', None) is not None:
+                    target.language_model = wrapped
+                else:
+                    dam.model = wrapped
+            else:
+                print("[compile] DAM: no .model attribute found, skipping")
+    else:
+        print("[DAM] --model-path not provided, skipping DAM model load.")
 
     # Load DINOv2 model
     try:
         dinov2_model_name = getattr(app.args, 'dinov2_model', DINOV2_MODEL)
         dinov2_model, dinov2_transform = load_dinov2_model(dinov2_model_name)
+        if do_compile:
+            # DINOv2 is a clean forward pass with fixed 518x518 input — safest target
+            dinov2_model = _try_compile(dinov2_model, label="DINOv2", mode=compile_mode, fullgraph=False)
     except Exception as e:
         print(f"[DINOv2] Failed to load model: {e}")
         traceback.print_exc()
@@ -279,6 +331,17 @@ async def lifespan(app: FastAPI):
             print(f"[SAM2]   config: {sam2_config}")
             sam2_predictor = build_sam2_video_predictor(sam2_config, sam2_checkpoint, device=device)
             print("[SAM2] Video predictor loaded successfully!")
+            if do_compile:
+                # Only compile the image encoder. The rest of the predictor has
+                # dynamic control flow (memory bank, mask decoder) that fights the
+                # compiler and would cause heavy graph breaks.
+                encoder = getattr(sam2_predictor, 'image_encoder', None)
+                if encoder is not None:
+                    sam2_predictor.image_encoder = _try_compile(
+                        encoder, label="SAM2 image_encoder", mode=compile_mode, fullgraph=False
+                    )
+                else:
+                    print("[compile] SAM2: no .image_encoder attribute found, skipping")
         except Exception as e:
             print(f"[SAM2] Failed to load model: {e}")
             traceback.print_exc()
@@ -294,7 +357,7 @@ app = FastAPI(debug=True, lifespan=lifespan)
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://annotator.stecom.vn", "http://localhost:4200", "https://video-labeling.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -732,6 +795,171 @@ async def detect_scenes_endpoint(req: SceneDetectRequest):
             except Exception as e:
                 print(f"Warning: Failed to delete temp file {temp_video_path}: {e}")
 
+def _normalize_cuts(cut_ranges: List[CutRange], duration: float) -> List[tuple[float, float]]:
+    """Clamp to [0, duration], drop zero-length / inverted, sort, merge overlaps."""
+    cleaned: List[tuple[float, float]] = []
+    for r in cut_ranges:
+        s = max(0.0, min(r.start_sec, r.end_sec))
+        e = min(duration, max(r.start_sec, r.end_sec))
+        if e - s > 0.001:
+            cleaned.append((s, e))
+    cleaned.sort(key=lambda t: t[0])
+    merged: List[tuple[float, float]] = []
+    for s, e in cleaned:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def _keep_ranges(cuts: List[tuple[float, float]], duration: float) -> List[tuple[float, float]]:
+    """Complement of cuts within [0, duration]."""
+    keep: List[tuple[float, float]] = []
+    cursor = 0.0
+    for s, e in cuts:
+        if s > cursor:
+            keep.append((cursor, s))
+        cursor = e
+    if cursor < duration:
+        keep.append((cursor, duration))
+    return [(s, e) for s, e in keep if e - s > 0.001]
+
+
+def _probe_duration(path: str) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+         "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True
+    )
+    return float(out.stdout.strip())
+
+
+def _has_audio(path: str) -> bool:
+    out = subprocess.run(
+        ["ffprobe", "-v", "quiet", "-select_streams", "a",
+         "-show_entries", "stream=codec_type", "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True
+    )
+    return bool(out.stdout.strip())
+
+
+def _build_filter_complex(keeps: List[tuple[float, float]], with_audio: bool) -> tuple[str, List[str]]:
+    """Build a `-filter_complex` arg and the corresponding `-map` args."""
+    parts: List[str] = []
+    concat_inputs: List[str] = []
+    for i, (s, e) in enumerate(keeps):
+        parts.append(
+            f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}]"
+        )
+        concat_inputs.append(f"[v{i}]")
+        if with_audio:
+            parts.append(
+                f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]"
+            )
+            concat_inputs.append(f"[a{i}]")
+    n = len(keeps)
+    if with_audio:
+        parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=1[outv][outa]")
+        maps = ["-map", "[outv]", "-map", "[outa]"]
+    else:
+        parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=0[outv]")
+        maps = ["-map", "[outv]"]
+    return ";".join(parts), maps
+
+
+@app.post("/trim")
+async def trim_video(req: TrimRequest):
+    if not req.cut_ranges:
+        return JSONResponse(status_code=400, content={"error": "cut_ranges is required"})
+
+    src_path = None
+    out_path = None
+    try:
+        # 1. Download source
+        try:
+            print(f"[trim] Downloading {req.video_url}")
+            r = requests.get(req.video_url, stream=True, timeout=(5, 60))
+            r.raise_for_status()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                for chunk in r.iter_content(chunk_size=8192):
+                    tmp.write(chunk)
+                src_path = tmp.name
+        except Exception as e:
+            return JSONResponse(status_code=502, content={"error": f"failed to fetch source video: {e}"})
+
+        # 2. Probe duration + audio presence
+        try:
+            duration = _probe_duration(src_path)
+            with_audio = _has_audio(src_path)
+        except subprocess.CalledProcessError as e:
+            return JSONResponse(status_code=500, content={"error": f"ffprobe failed: {e.stderr or e}"})
+
+        # 3. Compute keep ranges
+        cuts = _normalize_cuts(req.cut_ranges, duration)
+        keeps = _keep_ranges(cuts, duration)
+        if not keeps:
+            return JSONResponse(status_code=400, content={"error": "nothing left after cuts"})
+
+        # 4. Run ffmpeg
+        filter_str, maps = _build_filter_complex(keeps, with_audio)
+        out_fd, out_path = tempfile.mkstemp(suffix=".mp4")
+        os.close(out_fd)
+        cmd = [
+            "ffmpeg", "-y", "-i", src_path,
+            "-filter_complex", filter_str,
+            *maps,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        ]
+        if with_audio:
+            cmd += ["-c:a", "aac"]
+        cmd.append(out_path)
+
+        print(f"[trim] Running: {' '.join(cmd)}")
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            tail = (proc.stderr or "")[-500:]
+            return JSONResponse(status_code=500, content={"error": f"ffmpeg failed: {tail}"})
+
+        # 5. Stream back, deleting out_path after the body is fully sent
+        def file_iter(path: str):
+            try:
+                with open(path, "rb") as f:
+                    while True:
+                        chunk = f.read(64 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    print(f"[trim] warning: failed to delete {path}: {e}")
+        out_to_stream = out_path
+        out_path = None  # ownership transferred to file_iter; skip outer cleanup
+        return StreamingResponse(
+            file_iter(out_to_stream),
+            media_type="video/mp4",
+            headers={"Content-Disposition": 'attachment; filename="trimmed.mp4"'}
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    finally:
+        if src_path and os.path.exists(src_path):
+            try:
+                os.remove(src_path)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {src_path}: {e}")
+        if out_path and os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {out_path}: {e}")
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
@@ -748,7 +976,7 @@ if __name__ == "__main__":
     # Example: python dam_server.py --model-path nvidia/DAM-3B-Video --conv-mode v1 --prompt-mode focal_prompt --temperature 0.2 --top_p 0.9 --num_beams 1 --max_new_tokens 512 --workers 1 --image_video_joint_checkpoint
     host = os.getenv("DAM_HOST", "0.0.0.0")
     port = int(os.getenv("DAM_PORT", "8000"))
-    model_path = os.getenv("DAM_MODEL_PATH", "nvidia/DAM-3B")
+    model_path = os.getenv("DAM_MODEL_PATH", "")
     conv_mode = os.getenv("DAM_CONV_MODE", "v1")
     workers = int(os.getenv("DAM_WORKERS", "1"))
 
@@ -773,13 +1001,20 @@ if __name__ == "__main__":
                         help="Path to SAM2 config YAML (e.g., configs/sam2.1/sam2.1_hiera_l.yaml). Auto-detected if empty.")
     parser.add_argument("--dinov2-model", type=str, default=DINOV2_MODEL,
                         help="DINOv2 model name (dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14)")
+    parser.add_argument("--compile", action="store_true",
+                        help="Enable torch.compile (Triton/Inductor) on DAM LLM, DINOv2, and SAM2 image encoder. "
+                             "First inference takes 30-120s for kernel warmup; subsequent calls are faster.")
+    parser.add_argument("--compile-mode", type=str, default="reduce-overhead",
+                        choices=["default", "reduce-overhead", "max-autotune"],
+                        help="torch.compile mode. 'reduce-overhead' is best for inference servers; "
+                             "'max-autotune' is slower to compile, marginal gains for variable shapes.")
     app.args = parser.parse_args()
 
     # Pass args to app for lifespan access
     app._sam2_checkpoint = app.args.sam2_checkpoint
     app._sam2_config = app.args.sam2_config
 
-    if "joint" in app.args.model_path and not app.args.image_video_joint_checkpoint:
+    if app.args.model_path and "joint" in app.args.model_path and not app.args.image_video_joint_checkpoint:
         print("Warning: The loaded checkpoint looks like an image-video joint checkpoint, but the --image_video_joint_checkpoint flag is not set. This might lead to incorrect behavior, as joint checkpoints use a different prompt format even for single image inputs.")
 
     uvicorn.run(app, host=app.args.host, port=app.args.port,

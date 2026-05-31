@@ -16,6 +16,12 @@
       <button mat-icon-button matTooltip="Export ZIP" (click)="exportZipBySubparts()" *ngIf="project" [disabled]="isExporting">
         <mat-icon>{{ isExporting ? 'hourglass_empty' : 'download' }}</mat-icon>
       </button>
+      <button mat-icon-button matTooltip="Tải tất cả clip đã cắt + annotation" (click)="exportSegmentedClipsByProject()" *ngIf="project" [disabled]="isExporting">
+        <mat-icon>{{ isExporting ? 'hourglass_empty' : 'subscriptions' }}</mat-icon>
+      </button>
+      <button mat-icon-button matTooltip="Tải video đã đánh nhãn + annotation" (click)="exportLabeledVideosByProject()" *ngIf="project" [disabled]="isExporting">
+        <mat-icon>{{ isExporting ? 'hourglass_empty' : 'movie' }}</mat-icon>
+      </button>
     </div>
   </div>
   <div class="nav-right">

@@ -24,6 +24,14 @@ export class VideoService {
     return this.http.post(`${this.API}/upload`, formData);
   }
 
+  /**
+   * Trim a source video via DAM and return the trimmed bytes.
+   * Caller is responsible for wrapping the Blob in a File and calling uploadVideo().
+   */
+  trimVideo(videoUrl: string, cutRanges: { start_sec: number; end_sec: number }[]): Observable<Blob> {
+    return this.dam.trimVideo(videoUrl, cutRanges);
+  }
+
   getProjectVideos(projectId: string): Observable<VideoItem[]> {
     return this.http.get<VideoItem[]>(`${this.API}/project/${projectId}`);
   }
@@ -154,6 +162,38 @@ export class VideoService {
     return this.http.get(`${this.ANNOTATIONS_API}/export/video/${videoId}/segmented`, {
       responseType: 'blob'
     });
+  }
+
+  startBatchSegmentedExport(projectId: string, subpartId?: string): Observable<{ task_id: string }> {
+    const url = `${this.ANNOTATIONS_API}/export/project/${projectId}/segmented/start`
+      + (subpartId ? `?subpart_id=${subpartId}` : '');
+    return this.http.post<{ task_id: string }>(url, {});
+  }
+
+  checkBatchSegmentedExportStatus(taskId: string): Observable<{ task_id: string; status: string; progress: number; error?: string }> {
+    return this.http.get<{ task_id: string; status: string; progress: number; error?: string }>(
+      `${this.ANNOTATIONS_API}/export/segmented/status/${taskId}`
+    );
+  }
+
+  getBatchSegmentedExportDownloadUrl(taskId: string): string {
+    return `${this.ANNOTATIONS_API}/export/segmented/download/${taskId}`;
+  }
+
+  startLabeledVideosExport(projectId: string, subpartId?: string): Observable<{ task_id: string }> {
+    const url = `${this.ANNOTATIONS_API}/export/project/${projectId}/labeled-videos/start`
+      + (subpartId ? `?subpart_id=${subpartId}` : '');
+    return this.http.post<{ task_id: string }>(url, {});
+  }
+
+  checkLabeledVideosExportStatus(taskId: string): Observable<{ task_id: string; status: string; progress: number; error?: string }> {
+    return this.http.get<{ task_id: string; status: string; progress: number; error?: string }>(
+      `${this.ANNOTATIONS_API}/export/labeled-videos/status/${taskId}`
+    );
+  }
+
+  getLabeledVideosExportDownloadUrl(taskId: string): string {
+    return `${this.ANNOTATIONS_API}/export/labeled-videos/download/${taskId}`;
   }
 
   // ---- DAM Auto-Caption (Video: 8 frames) ----

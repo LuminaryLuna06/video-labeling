@@ -24,6 +24,7 @@ import { VideoService } from '../../core/services/video.service';
 import { ImageService } from '../../core/services/image.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
 import { Project, SubPart, VideoItem, ImageItem, User, Tag } from '../../core/models';
+import { generateThumbnail } from '../../core/utils/video-thumbnail';
 
 @Component({
   selector: 'app-project-detail',
@@ -473,7 +474,7 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
       this.uploadCurrentFile = file.name;
       this.uploadProgress = Math.round(((index) / files.length) * 100);
 
-      this.generateThumbnail(file).then((thumbnail) => {
+      generateThumbnail(file).then((thumbnail) => {
         this.videoService.uploadVideo(this.project!.id, file, this.selectedSubpart!.id, undefined, thumbnail).subscribe({
           next: () => {
             uploadedCount++;
@@ -490,41 +491,6 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     };
 
     uploadNext(0);
-  }
-
-  generateThumbnail(file: File): Promise<Blob | undefined> {
-    return new Promise((resolve) => {
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.muted = true;
-      video.playsInline = true;
-      const url = URL.createObjectURL(file);
-      video.src = url;
-
-      video.onloadeddata = () => {
-        // Seek to 1s or 25% of duration (whichever is smaller)
-        video.currentTime = Math.min(1, video.duration * 0.25);
-      };
-
-      video.onseeked = () => {
-        const canvas = document.createElement('canvas');
-        const w = 320;
-        const h = (video.videoHeight / video.videoWidth) * w || 180;
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d')!;
-        ctx.drawImage(video, 0, 0, w, h);
-        canvas.toBlob((blob) => {
-          URL.revokeObjectURL(url);
-          resolve(blob || undefined);
-        }, 'image/jpeg', 0.8);
-      };
-
-      video.onerror = () => {
-        URL.revokeObjectURL(url);
-        resolve(undefined);
-      };
-    });
   }
 
   // ---- Image Upload ----
@@ -1096,18 +1062,124 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     this.projectService.checkExportStatus(taskId).subscribe({
       next: (res) => {
         this.exportProgress = res.progress || 0;
-        
+
         if (res.status === 'processing') {
           this.exportStatusText = `Đang nén dữ liệu... ${res.progress}%`;
         } else if (res.status === 'completed') {
           this.exportStatusText = 'Hoàn tất! Bắt đầu tải file...';
           this.isExporting = false;
           if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
-          
+
           const downloadUrl = this.projectService.downloadExportFileUrl(taskId);
           window.open(downloadUrl, '_blank');
         } else if (res.status === 'failed') {
           this.exportStatusText = 'Lỗi nén file: ' + (res.error || 'Server error');
+          this.isExporting = false;
+          if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
+          this.snackBar.open(this.exportStatusText, 'Đóng');
+        }
+      },
+      error: () => {}
+    });
+  }
+
+  exportSegmentedClipsByProject() {
+    if (!this.project || this.isExporting) return;
+
+    this.isExporting = true;
+    this.exportProgress = 0;
+    this.exportStatusText = 'Đang khởi tạo cắt clip...';
+
+    this.videoService.startBatchSegmentedExport(this.project.id).subscribe({
+      next: (res) => {
+        this.exportTaskId = res.task_id;
+        this.pollingSubscription = interval(3000).subscribe(() => {
+          this.checkSegmentedClipsStatus(res.task_id);
+        });
+      },
+      error: (err) => {
+        this.isExporting = false;
+        this.snackBar.open('Lỗi khi bắt đầu cắt clip: ' + err.message, 'Đóng', { duration: 3000 });
+      }
+    });
+  }
+
+  checkSegmentedClipsStatus(taskId: string) {
+    this.videoService.checkBatchSegmentedExportStatus(taskId).subscribe({
+      next: (res) => {
+        this.exportProgress = res.progress || 0;
+
+        if (res.status === 'processing') {
+          this.exportStatusText = `Đang cắt clip & nén... ${res.progress}%`;
+        } else if (res.status === 'completed') {
+          this.exportStatusText = 'Hoàn tất! Bắt đầu tải file...';
+          this.isExporting = false;
+          if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
+
+          // Anchor click instead of window.open: avoids popup blocker after
+          // transient user activation expires during long-running export.
+          const downloadUrl = this.videoService.getBatchSegmentedExportDownloadUrl(taskId);
+          const a = document.createElement('a');
+          a.href = downloadUrl;
+          a.download = '';
+          a.style.display = 'none';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } else if (res.status === 'failed') {
+          this.exportStatusText = 'Lỗi cắt clip: ' + (res.error || 'Server error');
+          this.isExporting = false;
+          if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
+          this.snackBar.open(this.exportStatusText, 'Đóng');
+        }
+      },
+      error: () => {}
+    });
+  }
+
+  exportLabeledVideosByProject() {
+    if (!this.project || this.isExporting) return;
+
+    this.isExporting = true;
+    this.exportProgress = 0;
+    this.exportStatusText = 'Đang chuẩn bị video đã đánh nhãn...';
+
+    this.videoService.startLabeledVideosExport(this.project.id).subscribe({
+      next: (res) => {
+        this.exportTaskId = res.task_id;
+        this.pollingSubscription = interval(3000).subscribe(() => {
+          this.checkLabeledVideosStatus(res.task_id);
+        });
+      },
+      error: (err) => {
+        this.isExporting = false;
+        this.snackBar.open('Lỗi khi bắt đầu export: ' + err.message, 'Đóng', { duration: 3000 });
+      }
+    });
+  }
+
+  checkLabeledVideosStatus(taskId: string) {
+    this.videoService.checkLabeledVideosExportStatus(taskId).subscribe({
+      next: (res) => {
+        this.exportProgress = res.progress || 0;
+
+        if (res.status === 'processing') {
+          this.exportStatusText = `Đang đóng gói video + annotation... ${res.progress}%`;
+        } else if (res.status === 'completed') {
+          this.exportStatusText = 'Hoàn tất! Bắt đầu tải file...';
+          this.isExporting = false;
+          if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
+
+          const downloadUrl = this.videoService.getLabeledVideosExportDownloadUrl(taskId);
+          const a = document.createElement('a');
+          a.href = downloadUrl;
+          a.download = '';
+          a.style.display = 'none';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        } else if (res.status === 'failed') {
+          this.exportStatusText = 'Lỗi export: ' + (res.error || 'Server error');
           this.isExporting = false;
           if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
           this.snackBar.open(this.exportStatusText, 'Đóng');

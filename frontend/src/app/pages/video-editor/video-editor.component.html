@@ -28,10 +28,10 @@
       <mat-icon>download</mat-icon> Export
     </button>
     <mat-menu #exportMenu="matMenu">
-      <a mat-menu-item *ngIf="video?.url" [href]="video.url" [download]="video?.original_name || 'video'" target="_blank">
+      <button mat-menu-item *ngIf="video?.url" (click)="downloadVideoFile()">
         <mat-icon>file_download</mat-icon>
         <span>Download Video File</span>
-      </a>
+      </button>
       <button mat-menu-item (click)="downloadSegmentedVideo()">
         <mat-icon>subscriptions</mat-icon>
         <span>Download Segmented Video</span>
@@ -195,6 +195,15 @@
               [style.background]="getSegmentColor(segments.length) + '50'"
               [style.borderColor]="getSegmentColor(segments.length)">
             </div>
+            <!-- Trim cut markers -->
+            <div *ngFor="let c of cutRanges" class="cut-marker"
+              [style.left.%]="(c.start / duration) * 100"
+              [style.width.%]="((c.end - c.start) / duration) * 100">
+            </div>
+            <!-- Pending trim cut start (vertical line) -->
+            <div *ngIf="pendingCutStart !== null" class="pending-cut-start"
+              [style.left.%]="(pendingCutStart / duration) * 100">
+            </div>
           </div>
           <span class="time-display">{{ formatTime(duration) }}</span>
           <button mat-icon-button (click)="toggleMute()">
@@ -202,7 +211,7 @@
           </button>
         </div>
 
-        <!-- Segment Actions -->
+        <!-- Segment + Trim Actions -->
         <div class="segment-actions">
           <button mat-raised-button class="action-btn" (click)="markSegmentStart()">
             <mat-icon>first_page</mat-icon> Mark Start
@@ -213,6 +222,24 @@
           <button mat-raised-button class="primary-btn" (click)="addSegment()" [disabled]="segmentStart === null">
             <mat-icon>add</mat-icon> Add Segment
           </button>
+
+          <div class="toolbar-divider"></div>
+
+          <button mat-raised-button class="action-btn trim-btn" (click)="markCutStart()" [disabled]="trimming"
+                  matTooltip="Mark start of a range to remove">
+            <mat-icon>content_cut</mat-icon> Cut Start
+          </button>
+          <button mat-raised-button class="action-btn trim-btn" (click)="markCutEnd()" [disabled]="pendingCutStart === null || trimming"
+                  matTooltip="Mark end of the range to remove">
+            <mat-icon>stop</mat-icon> Cut End
+          </button>
+          <button mat-raised-button class="trim-save-btn" color="warn" [disabled]="!canSaveTrimmed()" (click)="saveTrimmed()"
+                  [matTooltip]="cutRanges.length > 0 ? ('Save trimmed video (' + cutRanges.length + ' cut' + (cutRanges.length === 1 ? '' : 's') + ')') : 'Mark at least one cut to enable'">
+            <mat-icon>save</mat-icon>
+            <span *ngIf="!trimming">Save Trimmed</span>
+            <span *ngIf="trimming">Trimming…</span>
+          </button>
+
           <div class="spacer"></div>
           <button mat-raised-button class="action-btn" (click)="autoSplit()">
             <mat-icon>auto_fix_high</mat-icon> Auto Split
@@ -281,6 +308,20 @@
           [style.background]="getSegmentColor(segments.length) + '50'"
           [style.borderColor]="getSegmentColor(segments.length)">
           <span class="tl-seg-name">New Segment</span>
+        </div>
+        <!-- Trim cuts on timeline (hover to delete) -->
+        <div *ngFor="let c of cutRanges" class="timeline-cut"
+          [style.left.%]="(c.start / duration) * 100"
+          [style.width.%]="((c.end - c.start) / duration) * 100"
+          [title]="formatTime(c.start) + ' → ' + formatTime(c.end) + ' (' + formatTime(c.end - c.start) + ')'">
+          <span class="tl-cut-name">cut</span>
+          <button type="button" class="cut-remove"
+            (click)="removeCut(c.id); $event.stopPropagation()"
+            [disabled]="trimming"
+            title="Remove cut">×</button>
+        </div>
+        <div *ngIf="pendingCutStart !== null" class="timeline-pending-cut-start"
+          [style.left.%]="(pendingCutStart / duration) * 100">
         </div>
         <!-- Time markers -->
         <div class="time-markers">

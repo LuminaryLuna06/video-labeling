@@ -10,5 +10,14 @@ opencv-python>=4.8.0
 requests>=2.31.0
 scenedetect>=0.6.3
 
+# DAM runtime deps (declared in dam pkg METADATA but not propagated by pip)
+# Pin transformers <5 because dam's llava_arch imports no_init_weights which 5.x removed
+transformers>=4.41.2,<5
+tokenizers>=0.19.1,<0.22
+sentencepiece
+accelerate>=0.28.0
+protobuf
+httpx
+
 # DINOv2 (loaded via torch.hub)
 # No explicit package needed - uses facebookresearch/dinov2 from torch hub

@@ -1228,38 +1228,35 @@ def get_qc_stats():
     # Get all users for names
     users = {str(u['_id']): u for u in db.users.find({}, {'username': 1, 'full_name': 1, 'avatar_color': 1})}
     
+    # Statuses tracked by the dashboard. Must match keys used downstream.
+    status_keys = ['not_submitted', 'pending_review', 'in_review', 'approved', 'rejected']
+
     # Calculate statistics
     stats = {
         'total_videos': len(videos),
-        'by_status': {
-            'pending': 0,
-            'approved': 0,
-            'rejected': 0,
-            'in_review': 0
-        },
+        'by_status': {k: 0 for k in status_keys},
         'by_project': {},
         'by_user': {},  # New: stats by user
         'recent_reviews': [],
         'pending_reviews': []
     }
-    
+
     for video in videos:
-        review_status = video.get('review_status', 'pending')
-        
+        review_status = video.get('review_status', 'not_submitted')
+        # Any unknown legacy value is treated as not_submitted so totals stay consistent.
+        if review_status not in stats['by_status']:
+            review_status = 'not_submitted'
+
         # Count by status
-        if review_status in stats['by_status']:
-            stats['by_status'][review_status] += 1
-        else:
-            stats['by_status']['pending'] += 1
-        
+        stats['by_status'][review_status] += 1
+
         # Count by project
         project_id = str(video.get('project_id', ''))
         project_name = projects.get(project_id, {}).get('name', 'Unknown')
         if project_name not in stats['by_project']:
-            stats['by_project'][project_name] = {'total': 0, 'approved': 0, 'rejected': 0, 'pending': 0, 'in_review': 0}
+            stats['by_project'][project_name] = {'total': 0, **{k: 0 for k in status_keys}}
         stats['by_project'][project_name]['total'] += 1
-        if review_status in stats['by_project'][project_name]:
-            stats['by_project'][project_name][review_status] += 1
+        stats['by_project'][project_name][review_status] += 1
         
         # Collect reviews with details and count by user
         for review in video.get('reviews', []):
@@ -1308,7 +1305,7 @@ def get_qc_stats():
             })
         
         # Collect videos pending review
-        if review_status in ['pending', 'in_review']:
+        if review_status in ['pending_review', 'in_review']:
             subpart_id = str(video.get('subpart_id', ''))
             subpart = subparts.get(subpart_id, {})
             required_reviewers = [str(r) for r in subpart.get('reviewers', [])]
@@ -1328,7 +1325,7 @@ def get_qc_stats():
             # Add to pending reviews if:
             # - There are specific pending reviewers, OR
             # - The video is pending/in_review and has no required reviewers (needs any reviewer)
-            if pending_reviewers or (not required_reviewers and review_status in ['pending', 'in_review']):
+            if pending_reviewers or (not required_reviewers and review_status in ['pending_review', 'in_review']):
                 stats['pending_reviews'].append({
                     'video_id': str(video['_id']),
                     'video_name': video.get('original_name', 'Unknown'),
