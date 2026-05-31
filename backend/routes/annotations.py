@@ -1518,3 +1518,82 @@ def process_batch_labeled_videos_export(app, task_id, project_id, subpart_id=Non
                 )
             except Exception:
                 pass
+
+
+@annotations_bp.route('/export/project/<project_id>/labeled-videos/start', methods=['POST'])
+@token_required
+def start_labeled_videos_export(project_id):
+    """Start a background task to export labeled (segmented) videos + metadata."""
+    try:
+        project = current_app.db.projects.find_one({'_id': ObjectId(project_id)})
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+
+        subpart_id = request.args.get('subpart_id')
+
+        task_id = str(uuid.uuid4())
+        current_app.db.export_tasks.insert_one({
+            '_id': task_id,
+            'project_id': project_id,
+            'user_id': str(request.current_user['_id']),
+            'status': 'processing',
+            'progress': 0,
+            'file_path': None,
+            'created_at': datetime.now(timezone.utc),
+            'type': 'labeled_videos'
+        })
+
+        app = current_app._get_current_object()
+        thread = threading.Thread(
+            target=process_batch_labeled_videos_export,
+            args=(app, task_id, project_id, subpart_id)
+        )
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({'task_id': task_id}), 200
+
+    except Exception as e:
+        logger.error(f"[LabeledExport] Failed to start task: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@annotations_bp.route('/export/labeled-videos/status/<task_id>', methods=['GET'])
+@token_required
+def check_labeled_videos_export(task_id):
+    try:
+        task = current_app.db.export_tasks.find_one({'_id': task_id})
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+
+        if task.get('user_id') != str(request.current_user['_id']):
+            return jsonify({'error': 'Unauthorized'}), 403
+
+        return jsonify({
+            'task_id': task['_id'],
+            'status': task.get('status'),
+            'progress': task.get('progress', 0),
+            'error': task.get('error')
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@annotations_bp.route('/export/labeled-videos/download/<task_id>', methods=['GET'])
+def download_labeled_videos_export(task_id):
+    try:
+        task = current_app.db.export_tasks.find_one({'_id': task_id})
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+
+        if task.get('status') != 'completed':
+            return jsonify({'error': 'Task not completed yet'}), 400
+
+        file_path = task.get('file_path')
+        if not file_path or not os.path.exists(file_path):
+            return jsonify({'error': 'File not found on server'}), 404
+
+        filename = os.path.basename(file_path)
+        return send_file(file_path, as_attachment=True, download_name=filename)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
