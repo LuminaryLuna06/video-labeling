@@ -1062,18 +1062,64 @@ export class ProjectDetailComponent implements OnInit, OnDestroy {
     this.projectService.checkExportStatus(taskId).subscribe({
       next: (res) => {
         this.exportProgress = res.progress || 0;
-        
+
         if (res.status === 'processing') {
           this.exportStatusText = `Đang nén dữ liệu... ${res.progress}%`;
         } else if (res.status === 'completed') {
           this.exportStatusText = 'Hoàn tất! Bắt đầu tải file...';
           this.isExporting = false;
           if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
-          
+
           const downloadUrl = this.projectService.downloadExportFileUrl(taskId);
           window.open(downloadUrl, '_blank');
         } else if (res.status === 'failed') {
           this.exportStatusText = 'Lỗi nén file: ' + (res.error || 'Server error');
+          this.isExporting = false;
+          if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
+          this.snackBar.open(this.exportStatusText, 'Đóng');
+        }
+      },
+      error: () => {}
+    });
+  }
+
+  exportSegmentedClipsByProject() {
+    if (!this.project || this.isExporting) return;
+
+    this.isExporting = true;
+    this.exportProgress = 0;
+    this.exportStatusText = 'Đang khởi tạo cắt clip...';
+
+    this.videoService.startBatchSegmentedExport(this.project.id).subscribe({
+      next: (res) => {
+        this.exportTaskId = res.task_id;
+        this.pollingSubscription = interval(3000).subscribe(() => {
+          this.checkSegmentedClipsStatus(res.task_id);
+        });
+      },
+      error: (err) => {
+        this.isExporting = false;
+        this.snackBar.open('Lỗi khi bắt đầu cắt clip: ' + err.message, 'Đóng', { duration: 3000 });
+      }
+    });
+  }
+
+  checkSegmentedClipsStatus(taskId: string) {
+    this.videoService.checkBatchSegmentedExportStatus(taskId).subscribe({
+      next: (res) => {
+        this.exportProgress = res.progress || 0;
+
+        if (res.status === 'processing') {
+          this.exportStatusText = `Đang cắt clip & nén... ${res.progress}%`;
+        } else if (res.status === 'completed') {
+          this.exportStatusText = 'Hoàn tất! Bắt đầu tải file...';
+          this.isExporting = false;
+          if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
+
+          const downloadUrl = this.videoService.getBatchSegmentedExportDownloadUrl(taskId);
+          window.open(downloadUrl, '_blank');
+        } else if (res.status === 'failed') {
+          this.exportStatusText = 'Lỗi cắt clip: ' + (res.error || 'Server error');
           this.isExporting = false;
           if (this.pollingSubscription) this.pollingSubscription.unsubscribe();
           this.snackBar.open(this.exportStatusText, 'Đóng');
