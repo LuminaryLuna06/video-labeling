@@ -180,6 +180,22 @@ export class VideoService {
     return `${this.ANNOTATIONS_API}/export/segmented/download/${taskId}`;
   }
 
+  startLabeledVideosExport(projectId: string, subpartId?: string): Observable<{ task_id: string }> {
+    const url = `${this.ANNOTATIONS_API}/export/project/${projectId}/labeled-videos/start`
+      + (subpartId ? `?subpart_id=${subpartId}` : '');
+    return this.http.post<{ task_id: string }>(url, {});
+  }
+
+  checkLabeledVideosExportStatus(taskId: string): Observable<{ task_id: string; status: string; progress: number; error?: string }> {
+    return this.http.get<{ task_id: string; status: string; progress: number; error?: string }>(
+      `${this.ANNOTATIONS_API}/export/labeled-videos/status/${taskId}`
+    );
+  }
+
+  getLabeledVideosExportDownloadUrl(taskId: string): string {
+    return `${this.ANNOTATIONS_API}/export/labeled-videos/download/${taskId}`;
+  }
+
   // ---- DAM Auto-Caption (Video: 8 frames) ----
   generateCaption(frames: string[], maskImage: string, captionType: 'visual' | 'contextual'): Observable<{ caption: string; caption_type: string }> {
     return this.dam.generateCaption(frames, maskImage, captionType);
