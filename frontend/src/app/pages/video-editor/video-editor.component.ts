@@ -2222,6 +2222,36 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
+  downloadCurrentFrame(): void {
+    const video = this.videoPlayerRef?.nativeElement;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      this.snackBar.open('Video chưa sẵn sàng để chụp frame', '', { duration: 2000, panelClass: 'snack-error' });
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        this.snackBar.open('Không thể tạo ảnh frame', '', { duration: 3000, panelClass: 'snack-error' });
+        return;
+      }
+      const baseName = this.video?.original_name?.replace(/\.[^.]+$/, '') || 'frame';
+      const timeLabel = video.currentTime.toFixed(2).replace('.', '-');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${baseName}_frame_${timeLabel}s.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }
+
   downloadVideoFile(): void {
     if (!this.video?.url) return;
     const name = this.video.original_name || 'video.mp4';
