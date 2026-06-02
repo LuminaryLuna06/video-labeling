@@ -57,12 +57,10 @@
         <mat-form-field appearance="outline" class="full-width">
           <mat-label>Model</mat-label>
           <mat-select [(ngModel)]="form.gemini_model">
+            <mat-option value="gemini-3.5-flash">Gemini 3.5 Flash</mat-option>
+            <mat-option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</mat-option>
             <mat-option value="gemini-2.5-flash">Gemini 2.5 Flash</mat-option>
             <mat-option value="gemini-2.5-pro">Gemini 2.5 Pro</mat-option>
-            <mat-option value="gemini-2.0-flash">Gemini 2.0 Flash</mat-option>
-            <mat-option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</mat-option>
-            <mat-option value="gemini-1.5-flash">Gemini 1.5 Flash</mat-option>
-            <mat-option value="gemini-1.5-pro">Gemini 1.5 Pro</mat-option>
           </mat-select>
         </mat-form-field>
 
