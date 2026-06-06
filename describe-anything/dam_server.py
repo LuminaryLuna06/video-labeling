@@ -717,7 +717,7 @@ async def get_embedding(request: EmbedRequest):
 
 
 @app.post("/scene-detect")
-async def detect_scenes_endpoint(req: SceneDetectRequest):
+def detect_scenes_endpoint(req: SceneDetectRequest):
     temp_video_path = None
     try:
         # Download
