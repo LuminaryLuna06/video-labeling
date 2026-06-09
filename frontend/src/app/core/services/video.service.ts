@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { VideoItem, VideoSegment, ObjectRegion, SegmentationResponse, Caption, Category } from '../models';
-import { DamService, TrimUploadResponse, TrimVideoOptions } from './dam.service';
+import { DamService } from './dam.service';
 
 @Injectable({ providedIn: 'root' })
 export class VideoService {
@@ -25,11 +25,11 @@ export class VideoService {
   }
 
   /**
-   * Trim a source video via DAM. DAM uploads the result to the backend directly
-   * using the user's forwarded JWT and returns the new video record.
+   * Trim a source video via DAM and return the trimmed bytes.
+   * Caller is responsible for wrapping the Blob in a File and calling uploadVideo().
    */
-  trimVideo(opts: TrimVideoOptions): Observable<TrimUploadResponse> {
-    return this.dam.trimVideo(opts);
+  trimVideo(videoUrl: string, cutRanges: { start_sec: number; end_sec: number }[]): Observable<Blob> {
+    return this.dam.trimVideo(videoUrl, cutRanges);
   }
 
   getProjectVideos(projectId: string): Observable<VideoItem[]> {

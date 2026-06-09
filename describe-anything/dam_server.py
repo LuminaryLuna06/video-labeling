@@ -34,11 +34,10 @@ import torch.nn.functional as F
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image as PILImage
 from PIL.Image import Image
 from pydantic import BaseModel
-import jwt as _jwt
 import numpy as np
 import traceback
 import json
@@ -134,11 +133,6 @@ class CutRange(BaseModel):
 class TrimRequest(BaseModel):
     video_url: str
     cut_ranges: List[CutRange]
-    upload_url: str
-    project_id: str
-    target_name: str
-    subpart_id: Optional[str] = None
-    duration_hint: Optional[float] = None
 
 
 def fmt_time(seconds: float) -> str:
@@ -378,34 +372,6 @@ def _fmt_size(n: Optional[int]) -> str:
     if n < 1024 * 1024:
         return f"{n / 1024:.1f} KB"
     return f"{n / (1024 * 1024):.2f} MB"
-
-
-# JWT config must match the backend signing key and algorithm.
-JWT_SECRET = os.environ.get("JWT_SECRET")
-JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
-if not JWT_SECRET:
-    raise RuntimeError(
-        "JWT_SECRET env var is required. It must match the backend's Config.SECRET_KEY."
-    )
-
-TRIM_CONCURRENCY = int(os.environ.get("TRIM_CONCURRENCY", "2"))
-_trim_semaphore = asyncio.Semaphore(TRIM_CONCURRENCY)
-
-
-def _verify_jwt(authorization_header: Optional[str]) -> dict:
-    """Extract and verify a bearer JWT."""
-    if not authorization_header:
-        raise ValueError("missing Authorization header")
-    parts = authorization_header.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise ValueError("Authorization header must be 'Bearer <token>'")
-    token = parts[1]
-    try:
-        return _jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except _jwt.ExpiredSignatureError:
-        raise ValueError("token expired")
-    except _jwt.InvalidTokenError as e:
-        raise ValueError(f"invalid token: {e}")
 
 
 @app.middleware("http")
@@ -878,217 +844,136 @@ def _has_audio(path: str) -> bool:
     return bool(out.stdout.strip())
 
 
-def _probe_video_meta(path: str) -> dict:
-    """Return width, height, and duration metadata for a video file."""
-    out = subprocess.run(
-        ["ffprobe", "-v", "quiet",
-         "-select_streams", "v:0",
-         "-show_entries", "stream=width,height:format=duration",
-         "-of", "json", path],
-        capture_output=True, text=True, check=True
-    )
-    data = json.loads(out.stdout)
-    stream = data["streams"][0] if data.get("streams") else {}
-    fmt = data.get("format", {})
-    return {
-        "width": int(stream.get("width", 0) or 0),
-        "height": int(stream.get("height", 0) or 0),
-        "duration": float(fmt.get("duration", 0.0) or 0.0),
-    }
-
-
-def _make_thumbnail(src_path: str, duration: float) -> str:
-    """Generate a JPEG thumbnail matching the frontend's timing."""
-    seek = min(1.0, max(0.0, duration * 0.25))
-    fd, thumb_path = tempfile.mkstemp(suffix=".jpg", prefix="trim_thumb_")
-    os.close(fd)
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", f"{seek}",
-        "-i", src_path,
-        "-frames:v", "1",
-        "-vf", "scale=320:-2",
-        "-q:v", "4",
-        thumb_path,
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode != 0:
-        try:
-            os.remove(thumb_path)
-        except OSError:
-            pass
-        raise RuntimeError(f"thumbnail generation failed: {(proc.stderr or '')[-300:]}")
-    return thumb_path
-
-
-def _upload_to_backend(
-    upload_url: str,
-    bearer_token: str,
-    video_path: str,
-    thumb_path: str,
-    project_id: str,
-    subpart_id: Optional[str],
-    target_name: str,
-    width: int,
-    height: int,
-    duration: float,
-) -> tuple[int, dict | str]:
-    """POST the trimmed video and thumbnail to the backend upload endpoint."""
-    endpoint = upload_url.rstrip("/") + "/api/videos/upload"
-    headers = {"Authorization": f"Bearer {bearer_token}"}
-    data = {
-        "project_id": project_id,
-        "duration": str(duration),
-        "width": str(width),
-        "height": str(height),
-    }
-    if subpart_id:
-        data["subpart_id"] = subpart_id
-    with open(video_path, "rb") as vf, open(thumb_path, "rb") as tf:
-        files = {
-            "video": (target_name, vf, "video/mp4"),
-            "thumbnail": ("thumb.jpg", tf, "image/jpeg"),
-        }
-        resp = requests.post(endpoint, headers=headers, data=data, files=files, timeout=(30, 600))
-    try:
-        return resp.status_code, resp.json()
-    except ValueError:
-        return resp.status_code, resp.text
-
-
 @app.post("/trim")
-async def trim_video(req: TrimRequest, request: Request):
-    try:
-        jwt_payload = _verify_jwt(request.headers.get("Authorization"))
-    except ValueError as e:
-        return JSONResponse(status_code=401, content={"error": str(e)})
-
+async def trim_video(req: TrimRequest):
     if not req.cut_ranges:
         return JSONResponse(status_code=400, content={"error": "cut_ranges is required"})
 
-    bearer_token = request.headers["Authorization"].split()[1]
     src_path = None
     out_path = None
-    thumb_path = None
     seg_paths: List[str] = []
     list_path = None
-
-    async with _trim_semaphore:
+    try:
+        # 1. Download source
         try:
-            # 1. Download source
-            try:
-                print(f"[trim] user={jwt_payload.get('user_id')} downloading {req.video_url}")
-                r = requests.get(req.video_url, stream=True, timeout=(5, 60))
-                r.raise_for_status()
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        tmp.write(chunk)
-                    src_path = tmp.name
-            except Exception as e:
-                return JSONResponse(status_code=502, content={"error": f"failed to fetch source video: {e}"})
+            print(f"[trim] Downloading {req.video_url}")
+            r = requests.get(req.video_url, stream=True, timeout=(5, 60))
+            r.raise_for_status()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+                for chunk in r.iter_content(chunk_size=8192):
+                    tmp.write(chunk)
+                src_path = tmp.name
+        except Exception as e:
+            return JSONResponse(status_code=502, content={"error": f"failed to fetch source video: {e}"})
 
-            # 2. Probe duration and audio presence
-            try:
-                duration = _probe_duration(src_path)
-                with_audio = _has_audio(src_path)
-            except subprocess.CalledProcessError as e:
-                return JSONResponse(status_code=500, content={"error": f"ffprobe failed: {e.stderr or e}"})
+        # 2. Probe duration + audio presence
+        try:
+            duration = _probe_duration(src_path)
+            with_audio = _has_audio(src_path)
+        except subprocess.CalledProcessError as e:
+            return JSONResponse(status_code=500, content={"error": f"ffprobe failed: {e.stderr or e}"})
 
-            # 3. Compute keep ranges
-            cuts = _normalize_cuts(req.cut_ranges, duration)
-            keeps = _keep_ranges(cuts, duration)
-            if not keeps:
-                return JSONResponse(status_code=400, content={"error": "nothing left after cuts"})
+        # 3. Compute keep ranges
+        cuts = _normalize_cuts(req.cut_ranges, duration)
+        keeps = _keep_ranges(cuts, duration)
+        if not keeps:
+            return JSONResponse(status_code=400, content={"error": "nothing left after cuts"})
 
-            # 4. Encode each keep range as a segment via NVDEC and NVENC.
-            for i, (s, e) in enumerate(keeps):
-                seg_fd, seg_path = tempfile.mkstemp(suffix=".mp4", prefix=f"trim_seg_{i}_")
-                os.close(seg_fd)
-                seg_paths.append(seg_path)
-                cmd = [
-                    "ffmpeg", "-y",
-                    "-hwaccel", "cuda",
-                    "-hwaccel_output_format", "cuda",
-                    "-i", src_path,
-                    "-ss", f"{s}", "-to", f"{e}",
-                    "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20",
-                ]
-                if with_audio:
-                    cmd += ["-c:a", "aac"]
-                cmd.append(seg_path)
-                print(f"[trim] segment {i+1}/{len(keeps)} [{s:.3f}-{e:.3f}]")
-                proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.returncode != 0:
-                    tail = (proc.stderr or "")[-500:]
-                    return JSONResponse(status_code=500, content={"error": f"ffmpeg segment {i} failed: {tail}"})
-
-            # 5. Concat segments via the concat demuxer with stream-copy.
-            list_fd, list_path = tempfile.mkstemp(suffix=".txt", prefix="trim_list_")
-            with os.fdopen(list_fd, "w") as f:
-                for p in seg_paths:
-                    f.write(f"file '{p}'\n")
-
-            out_fd, out_path = tempfile.mkstemp(suffix=".mp4", prefix="trim_out_")
-            os.close(out_fd)
-            concat_cmd = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", list_path, "-c", "copy", out_path,
+        # 4. Encode each keep range as a segment via NVDEC + NVENC.
+        #    `-ss` AFTER `-i` keeps frame-accurate trimming; CUDA decode is cheap.
+        for i, (s, e) in enumerate(keeps):
+            seg_fd, seg_path = tempfile.mkstemp(suffix=".mp4", prefix=f"trim_seg_{i}_")
+            os.close(seg_fd)
+            seg_paths.append(seg_path)
+            cmd = [
+                "ffmpeg", "-y",
+                "-hwaccel", "cuda",
+                "-hwaccel_output_format", "cuda",
+                "-i", src_path,
+                "-ss", f"{s}", "-to", f"{e}",
+                "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20",
             ]
-            print(f"[trim] concat {len(seg_paths)} segments")
-            proc = subprocess.run(concat_cmd, capture_output=True, text=True)
+            if with_audio:
+                cmd += ["-c:a", "aac"]
+            cmd.append(seg_path)
+            print(f"[trim] Segment {i+1}/{len(keeps)} [{s:.3f}-{e:.3f}] -> {seg_path}")
+            proc = subprocess.run(cmd, capture_output=True, text=True)
             if proc.returncode != 0:
                 tail = (proc.stderr or "")[-500:]
-                return JSONResponse(status_code=500, content={"error": f"ffmpeg concat failed: {tail}"})
+                return JSONResponse(status_code=500, content={"error": f"ffmpeg segment {i} failed: {tail}"})
 
-            # 6. Probe output and generate thumbnail.
+        # 5. Concat segments via the concat demuxer with stream-copy.
+        list_fd, list_path = tempfile.mkstemp(suffix=".txt", prefix="trim_list_")
+        with os.fdopen(list_fd, "w") as f:
+            for p in seg_paths:
+                f.write(f"file '{p}'\n")
+
+        out_fd, out_path = tempfile.mkstemp(suffix=".mp4", prefix="trim_out_")
+        os.close(out_fd)
+        concat_cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", list_path, "-c", "copy", out_path,
+        ]
+        print(f"[trim] Concat {len(seg_paths)} segments -> {out_path}")
+        proc = subprocess.run(concat_cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            tail = (proc.stderr or "")[-500:]
+            return JSONResponse(status_code=500, content={"error": f"ffmpeg concat failed: {tail}"})
+
+        # 6. Stream back; transfer ownership of out + seg + list files to the iterator.
+        def file_iter(path: str, to_delete: List[str]):
             try:
-                meta = _probe_video_meta(out_path)
-            except subprocess.CalledProcessError as e:
-                return JSONResponse(status_code=500, content={"error": f"ffprobe (output) failed: {e.stderr or e}"})
-
-            try:
-                thumb_path = _make_thumbnail(out_path, meta["duration"])
-            except RuntimeError as e:
-                return JSONResponse(status_code=500, content={"error": str(e)})
-
-            # 7. Upload to backend with the forwarded JWT.
-            print(f"[trim] uploading to {req.upload_url}/api/videos/upload")
-            try:
-                status, body = _upload_to_backend(
-                    upload_url=req.upload_url,
-                    bearer_token=bearer_token,
-                    video_path=out_path,
-                    thumb_path=thumb_path,
-                    project_id=req.project_id,
-                    subpart_id=req.subpart_id,
-                    target_name=req.target_name,
-                    width=meta["width"],
-                    height=meta["height"],
-                    duration=meta["duration"],
-                )
-            except requests.RequestException as e:
-                return JSONResponse(status_code=502, content={"error": f"backend upload network error: {e}"})
-
-            if status < 200 or status >= 300:
-                body_str = body if isinstance(body, str) else json.dumps(body)
-                return JSONResponse(
-                    status_code=502,
-                    content={"error": f"backend upload failed (HTTP {status}): {body_str[:500]}"},
-                )
-
-            return JSONResponse(status_code=200, content=body if isinstance(body, dict) else {"raw": body})
-
-        except Exception as e:
-            traceback.print_exc()
-            return JSONResponse(status_code=500, content={"error": str(e)})
-
-        finally:
-            for path in [src_path, out_path, thumb_path, list_path, *seg_paths]:
-                if path and os.path.exists(path):
+                with open(path, "rb") as f:
+                    while True:
+                        chunk = f.read(64 * 1024)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                for p in [path, *to_delete]:
                     try:
-                        os.remove(path)
-                    except Exception as ex:
-                        print(f"[trim] warning: failed to delete {path}: {ex}")
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except Exception as e:
+                        print(f"[trim] warning: failed to delete {p}: {e}")
+
+        out_to_stream = out_path
+        tail_files = [*seg_paths, list_path]
+        out_path = None
+        seg_paths = []
+        list_path = None
+        return StreamingResponse(
+            file_iter(out_to_stream, tail_files),
+            media_type="video/mp4",
+            headers={"Content-Disposition": 'attachment; filename="trimmed.mp4"'}
+        )
+
+    except Exception as e:
+        traceback.print_exc()
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+    finally:
+        if src_path and os.path.exists(src_path):
+            try:
+                os.remove(src_path)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {src_path}: {e}")
+        for p in seg_paths:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {p}: {e}")
+        if list_path and os.path.exists(list_path):
+            try:
+                os.remove(list_path)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {list_path}: {e}")
+        if out_path and os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {out_path}: {e}")
 
 
 @app.get("/health")
