@@ -26,7 +26,8 @@ export class VideoService {
 
   /**
    * Trim a source video via the backend. Backend asks dam_server to encode
-   * and saves the result. Returns the new VideoItem record.
+   * (using the DAM URL the user configured in Settings) and saves the
+   * result. Returns the new VideoItem record.
    */
   trimVideo(opts: {
     sourceVideoId: string;
@@ -39,6 +40,7 @@ export class VideoService {
       cut_ranges: opts.cutRanges,
       target_name: opts.targetName,
       duration_hint: opts.durationHint,
+      dam_url: this.dam.getDamUrl(),
     });
   }
 

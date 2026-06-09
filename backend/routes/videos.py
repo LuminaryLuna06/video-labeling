@@ -685,11 +685,17 @@ def trim_video():
     cut_ranges = data.get('cut_ranges')
     target_name = data.get('target_name')
     duration_hint = data.get('duration_hint')
+    dam_url = data.get('dam_url')
 
     if not source_video_id:
         return jsonify({'error': 'source_video_id is required'}), 400
     if not isinstance(cut_ranges, list) or len(cut_ranges) == 0:
         return jsonify({'error': 'cut_ranges must be a non-empty list'}), 400
+    if not isinstance(dam_url, str) or not dam_url.strip():
+        return jsonify({'error': 'dam_url is required'}), 400
+    dam_url = dam_url.strip()
+    if not (dam_url.startswith('http://') or dam_url.startswith('https://')):
+        return jsonify({'error': 'dam_url must be an http(s) URL'}), 400
 
     try:
         source = current_app.db.videos.find_one({'_id': ObjectId(source_video_id)})
@@ -702,7 +708,7 @@ def trim_video():
     # served by `/uploads/<path:filename>` in app.py.
     video_url = request.url_root.rstrip('/') + f'/uploads/videos/{source["filename"]}'
 
-    dam_endpoint = Config.DAM_SERVER_URL.rstrip('/') + '/trim'
+    dam_endpoint = dam_url.rstrip('/') + '/trim'
     try:
         resp = requests.post(
             dam_endpoint,
