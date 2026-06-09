@@ -81,43 +81,6 @@ export class DamService {
   }
 
   /**
-   * Send source URL + cut ranges to DAM /trim; returns the trimmed mp4 bytes.
-   * URL is absolutized here to mirror detectScenes().
-   */
-  trimVideo(videoUrl: string, cutRanges: { start_sec: number; end_sec: number }[]): Observable<Blob> {
-    const url = `${this.getDamUrl()}/trim`;
-    let absoluteVideoUrl = videoUrl;
-    if (!absoluteVideoUrl.startsWith('http')) {
-      absoluteVideoUrl = window.location.origin + absoluteVideoUrl;
-    }
-    return this.http.post(url, {
-      video_url: absoluteVideoUrl,
-      cut_ranges: cutRanges
-    }, { responseType: 'blob' as 'blob' }).pipe(
-      catchError((err) => {
-        if (err?.error instanceof Blob) {
-          return from((err.error as Blob).text()).pipe(
-            switchMap((text: string) => {
-              let msg: string = text;
-              try {
-                const parsed = JSON.parse(text);
-                const candidate = parsed?.error ?? parsed?.detail;
-                if (typeof candidate === 'string' && candidate) {
-                  msg = candidate;
-                }
-              } catch {
-                // not JSON — keep the raw text
-              }
-              return throwError(() => new Error(msg || `DAM /trim failed (HTTP ${err?.status ?? '?'})`));
-            })
-          );
-        }
-        return throwError(() => new Error(this.formatError(url, err)));
-      })
-    );
-  }
-
-  /**
    * Send a brush mask + frame image to DAM's /segment endpoint (SAM2-backed).
    * Returns a refined object mask.
    */
