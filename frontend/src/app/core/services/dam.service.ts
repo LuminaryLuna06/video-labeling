@@ -7,6 +7,27 @@ import { SettingsService } from './settings.service';
 import { composeRgba, composeRgbJpeg, padOrTrimFrames } from '../utils/rgba-compose';
 import { SegmentationResponse } from '../models';
 
+export interface TrimUploadResponse {
+  id: string;
+  filename: string;
+  original_name: string;
+  file_size: number;
+  url: string;
+  thumbnail_url: string;
+  status: string;
+  message?: string;
+}
+
+export interface TrimVideoOptions {
+  videoUrl: string;
+  cutRanges: { start_sec: number; end_sec: number }[];
+  uploadUrl: string;
+  projectId: string;
+  targetName: string;
+  subpartId?: string;
+  durationHint?: number;
+}
+
 export interface DamHealthResponse {
   status: string;
   dam_loaded?: boolean;
@@ -81,19 +102,24 @@ export class DamService {
   }
 
   /**
-   * Send source URL + cut ranges to DAM /trim; returns the trimmed mp4 bytes.
-   * URL is absolutized here to mirror detectScenes().
+   * Trim a source video via DAM. DAM uploads the result directly to the backend
+   * using the user's forwarded JWT and returns the new video record.
    */
-  trimVideo(videoUrl: string, cutRanges: { start_sec: number; end_sec: number }[]): Observable<Blob> {
+  trimVideo(opts: TrimVideoOptions): Observable<TrimUploadResponse> {
     const url = `${this.getDamUrl()}/trim`;
-    let absoluteVideoUrl = videoUrl;
+    let absoluteVideoUrl = opts.videoUrl;
     if (!absoluteVideoUrl.startsWith('http')) {
       absoluteVideoUrl = window.location.origin + absoluteVideoUrl;
     }
-    return this.http.post(url, {
+    return this.http.post<TrimUploadResponse>(url, {
       video_url: absoluteVideoUrl,
-      cut_ranges: cutRanges
-    }, { responseType: 'blob' as 'blob' }).pipe(
+      cut_ranges: opts.cutRanges,
+      upload_url: opts.uploadUrl,
+      project_id: opts.projectId,
+      target_name: opts.targetName,
+      ...(opts.subpartId ? { subpart_id: opts.subpartId } : {}),
+      ...(opts.durationHint !== undefined ? { duration_hint: opts.durationHint } : {}),
+    }).pipe(
       catchError((err) => {
         if (err?.error instanceof Blob) {
           return from((err.error as Blob).text()).pipe(
@@ -226,6 +252,8 @@ export class DamService {
       return `Cannot reach DAM at ${target}. Check the URL in Settings and that the server is running.`;
     }
     if (typeof err?.error === 'string') return err.error;
+    if (typeof err?.error?.error === 'string') return err.error.error;
+    if (typeof err?.error?.detail === 'string') return err.error.detail;
     if (err?.message) return err.message;
     return `DAM request failed (HTTP ${err?.status ?? '?'})`;
   }

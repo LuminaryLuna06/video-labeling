@@ -29,7 +29,6 @@ import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.comp
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
 import { normalizeCuts, keepRanges, CutRange } from '../../core/utils/cut-ranges';
-import { generateThumbnail } from '../../core/utils/video-thumbnail';
 import { forkJoin } from 'rxjs';
 
 @Component({
@@ -626,36 +625,27 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
     const ranges = this.cutRanges.map(c => ({ start_sec: c.start, end_sec: c.end }));
     const trimmedDuration = keeps.reduce((sum, k) => sum + (k.end - k.start), 0);
     const sourceVideo = this.video;
+    if (!sourceVideo.project_id) {
+      this.trimming = false;
+      this.snackBar.open('Cannot save: source video has no project', '', { duration: 3000, panelClass: 'snack-error' });
+      return;
+    }
+    const targetName = this.deriveTrimmedName(sourceVideo.original_name);
 
-    this.videoService.trimVideo(sourceVideo.url, ranges).subscribe({
-      next: (blob) => {
-        const trimmedName = this.deriveTrimmedName(sourceVideo.original_name);
-        const file = new File([blob], trimmedName, { type: 'video/mp4' });
-        if (!sourceVideo.project_id) {
-          this.trimming = false;
-          this.snackBar.open('Cannot save: source video has no project', '', { duration: 3000, panelClass: 'snack-error' });
-          return;
-        }
-        generateThumbnail(file).then((thumbnail) => {
-          this.videoService.uploadVideo(
-            sourceVideo.project_id!,
-            file,
-            sourceVideo.subpart_id,
-            trimmedDuration,
-            thumbnail
-          ).subscribe({
-            next: (res) => {
-              this.trimming = false;
-              this.snackBar
-                .open(`Saved as '${trimmedName}'`, 'Open', { duration: 5000, panelClass: 'snack-success' })
-                .onAction().subscribe(() => this.router.navigate(['/editor', res.id]));
-            },
-            error: () => {
-              this.trimming = false;
-              this.snackBar.open('Trim succeeded but upload failed', '', { duration: 4000, panelClass: 'snack-error' });
-            }
-          });
-        });
+    this.videoService.trimVideo({
+      videoUrl: sourceVideo.url,
+      cutRanges: ranges,
+      uploadUrl: window.location.origin,
+      projectId: sourceVideo.project_id!,
+      targetName,
+      subpartId: sourceVideo.subpart_id,
+      durationHint: trimmedDuration,
+    }).subscribe({
+      next: (res) => {
+        this.trimming = false;
+        this.snackBar
+          .open(`Saved as '${res.original_name}'`, 'Open', { duration: 5000, panelClass: 'snack-success' })
+          .onAction().subscribe(() => this.router.navigate(['/editor', res.id]));
       },
       error: (err) => {
         this.trimming = false;
