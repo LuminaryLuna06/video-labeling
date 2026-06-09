@@ -752,6 +752,33 @@ def trim_video():
         base = orig[:dot] if dot > 0 else orig
         target_name = f"{base}_trimmed.mp4"
 
+    # Generate thumbnail (match frontend behavior: ~25% in, max 1s seek, 320 wide).
+    thumbnail_filename = ''
+    try:
+        cap = cv2.VideoCapture(filepath)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        probe_duration = (total_frames / fps) if fps > 0 else 0.0
+        seek_sec = min(1.0, max(0.0, probe_duration * 0.25))
+        if fps > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(seek_sec * fps))
+        ret, frame = cap.read()
+        cap.release()
+        if ret and frame is not None:
+            h, w = frame.shape[:2]
+            if w > 320:
+                new_h = int(h * 320 / w)
+                frame = cv2.resize(frame, (320, new_h), interpolation=cv2.INTER_AREA)
+            thumb_dir = os.path.join(Config.UPLOAD_FOLDER, 'thumbnails')
+            os.makedirs(thumb_dir, exist_ok=True)
+            thumb_name = f"{uuid.uuid4().hex}.jpg"
+            thumb_path = os.path.join(thumb_dir, thumb_name)
+            if cv2.imwrite(thumb_path, frame, [cv2.IMWRITE_JPEG_QUALITY, 80]):
+                thumbnail_filename = thumb_name
+    except Exception:
+        # Thumbnail is best-effort; video upload still succeeds without one.
+        thumbnail_filename = ''
+
     video_doc = {
         'project_id': source['project_id'],
         'subpart_id': source.get('subpart_id'),
@@ -759,7 +786,7 @@ def trim_video():
         'original_name': target_name,
         'file_path': filepath,
         'file_size': file_size,
-        'thumbnail': '',
+        'thumbnail': thumbnail_filename,
         'duration': float(duration_hint) if duration_hint is not None else 0.0,
         'width': int(source.get('width', 0) or 0),
         'height': int(source.get('height', 0) or 0),
@@ -778,7 +805,7 @@ def trim_video():
         'original_name': target_name,
         'file_size': file_size,
         'url': f'/uploads/videos/{unique_filename}',
-        'thumbnail_url': '',
+        'thumbnail_url': f'/uploads/thumbnails/{thumbnail_filename}' if thumbnail_filename else '',
         'status': 'uploaded',
         'message': 'Trimmed video saved',
     })

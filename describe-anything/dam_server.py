@@ -845,7 +845,10 @@ def _has_audio(path: str) -> bool:
 
 
 @app.post("/trim")
-async def trim_video(req: TrimRequest):
+def trim_video(req: TrimRequest):
+    # Sync handler on purpose: ffmpeg subprocess.run blocks for tens of seconds;
+    # FastAPI runs `def` handlers in a worker thread so the event loop (and every
+    # other endpoint) stays responsive while this trim runs.
     if not req.cut_ranges:
         return JSONResponse(status_code=400, content={"error": "cut_ranges is required"})
 
