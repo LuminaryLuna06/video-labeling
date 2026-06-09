@@ -675,6 +675,109 @@ def upload_video():
     }), 201
 
 
+@videos_bp.route('/trim', methods=['POST'])
+@token_required
+def trim_video():
+    """Orchestrate a trim job: ask dam_server to encode, save the result,
+    create a new VideoItem mirroring /upload. Frontend never sees the bytes."""
+    data = request.get_json(silent=True) or {}
+    source_video_id = data.get('source_video_id')
+    cut_ranges = data.get('cut_ranges')
+    target_name = data.get('target_name')
+    duration_hint = data.get('duration_hint')
+
+    if not source_video_id:
+        return jsonify({'error': 'source_video_id is required'}), 400
+    if not isinstance(cut_ranges, list) or len(cut_ranges) == 0:
+        return jsonify({'error': 'cut_ranges must be a non-empty list'}), 400
+
+    try:
+        source = current_app.db.videos.find_one({'_id': ObjectId(source_video_id)})
+    except Exception:
+        return jsonify({'error': 'Invalid source_video_id'}), 400
+    if not source:
+        return jsonify({'error': 'Source video not found'}), 404
+
+    # Build the URL dam_server will fetch from. Same URL the browser uses,
+    # served by `/uploads/<path:filename>` in app.py.
+    video_url = request.url_root.rstrip('/') + f'/uploads/videos/{source["filename"]}'
+
+    dam_endpoint = Config.DAM_SERVER_URL.rstrip('/') + '/trim'
+    try:
+        resp = requests.post(
+            dam_endpoint,
+            json={'video_url': video_url, 'cut_ranges': cut_ranges},
+            stream=True,
+            timeout=(30, 600),
+        )
+    except requests.RequestException as e:
+        return jsonify({'error': f'DAM server unreachable: {e}'}), 502
+
+    if resp.status_code != 200:
+        try:
+            err_body = resp.json()
+            err_msg = err_body.get('error') or str(err_body)[:500]
+        except ValueError:
+            err_msg = (resp.text or '')[:500]
+        return jsonify({'error': f'DAM /trim failed (HTTP {resp.status_code}): {err_msg}'}), 502
+
+    unique_filename = f"{uuid.uuid4().hex}.mp4"
+    videos_dir = os.path.join(Config.UPLOAD_FOLDER, 'videos')
+    os.makedirs(videos_dir, exist_ok=True)
+    filepath = os.path.join(videos_dir, unique_filename)
+    try:
+        with open(filepath, 'wb') as f:
+            for chunk in resp.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    f.write(chunk)
+    except Exception as e:
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+        return jsonify({'error': f'Failed to save trimmed video: {e}'}), 500
+
+    file_size = os.path.getsize(filepath)
+
+    if not target_name:
+        orig = source.get('original_name') or 'trimmed.mp4'
+        dot = orig.rfind('.')
+        base = orig[:dot] if dot > 0 else orig
+        target_name = f"{base}_trimmed.mp4"
+
+    video_doc = {
+        'project_id': source['project_id'],
+        'subpart_id': source.get('subpart_id'),
+        'filename': unique_filename,
+        'original_name': target_name,
+        'file_path': filepath,
+        'file_size': file_size,
+        'thumbnail': '',
+        'duration': float(duration_hint) if duration_hint is not None else 0.0,
+        'width': int(source.get('width', 0) or 0),
+        'height': int(source.get('height', 0) or 0),
+        'status': 'uploaded',
+        'current_step': 1,
+        'annotators': [],
+        'uploaded_by': request.current_user['_id'],
+        'created_at': datetime.now(timezone.utc),
+        'updated_at': datetime.now(timezone.utc),
+    }
+    result = current_app.db.videos.insert_one(video_doc)
+
+    return jsonify({
+        'id': str(result.inserted_id),
+        'filename': unique_filename,
+        'original_name': target_name,
+        'file_size': file_size,
+        'url': f'/uploads/videos/{unique_filename}',
+        'thumbnail_url': '',
+        'status': 'uploaded',
+        'message': 'Trimmed video saved',
+    })
+
+
 def _build_video_stats(db, video):
     """Build video dict with annotation statistics."""
     vid = video['_id']
