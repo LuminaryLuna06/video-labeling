@@ -29,7 +29,6 @@ import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.comp
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
 import { normalizeCuts, keepRanges, CutRange } from '../../core/utils/cut-ranges';
-import { generateThumbnail } from '../../core/utils/video-thumbnail';
 import { forkJoin } from 'rxjs';
 
 @Component({
@@ -606,11 +605,6 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       && keepRanges(this.cutRanges, this.duration).length > 0;
   }
 
-  private deriveTrimmedName(original: string): string {
-    const dot = original.lastIndexOf('.');
-    const base = dot > 0 ? original.slice(0, dot) : original;
-    return `${base}_trimmed.mp4`;
-  }
 
   saveTrimmed(): void {
     if (!this.video || this.trimming || this.cutRanges.length === 0) return;
@@ -622,44 +616,31 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       return;
     }
 
+    const sourceVideo = this.video;
+    if (!sourceVideo.project_id) {
+      this.snackBar.open('Cannot save: source video has no project', '', { duration: 3000, panelClass: 'snack-error' });
+      return;
+    }
+
     this.trimming = true;
     const ranges = this.cutRanges.map(c => ({ start_sec: c.start, end_sec: c.end }));
     const trimmedDuration = keeps.reduce((sum, k) => sum + (k.end - k.start), 0);
-    const sourceVideo = this.video;
 
-    this.videoService.trimVideo(sourceVideo.url, ranges).subscribe({
-      next: (blob) => {
-        const trimmedName = this.deriveTrimmedName(sourceVideo.original_name);
-        const file = new File([blob], trimmedName, { type: 'video/mp4' });
-        if (!sourceVideo.project_id) {
-          this.trimming = false;
-          this.snackBar.open('Cannot save: source video has no project', '', { duration: 3000, panelClass: 'snack-error' });
-          return;
-        }
-        generateThumbnail(file).then((thumbnail) => {
-          this.videoService.uploadVideo(
-            sourceVideo.project_id!,
-            file,
-            sourceVideo.subpart_id,
-            trimmedDuration,
-            thumbnail
-          ).subscribe({
-            next: (res) => {
-              this.trimming = false;
-              this.snackBar
-                .open(`Saved as '${trimmedName}'`, 'Open', { duration: 5000, panelClass: 'snack-success' })
-                .onAction().subscribe(() => this.router.navigate(['/editor', res.id]));
-            },
-            error: () => {
-              this.trimming = false;
-              this.snackBar.open('Trim succeeded but upload failed', '', { duration: 4000, panelClass: 'snack-error' });
-            }
-          });
-        });
+    this.videoService.trimVideo({
+      sourceVideoId: sourceVideo.id,
+      cutRanges: ranges,
+      durationHint: trimmedDuration,
+    }).subscribe({
+      next: (res) => {
+        this.trimming = false;
+        this.snackBar
+          .open(`Saved as '${res.original_name}'`, 'Open', { duration: 5000, panelClass: 'snack-success' })
+          .onAction().subscribe(() => this.router.navigate(['/editor', res.id]));
       },
       error: (err) => {
         this.trimming = false;
-        this.snackBar.open(`Trim failed: ${err?.message || 'unknown error'}`, '', { duration: 4000, panelClass: 'snack-error' });
+        const msg = err?.error?.error || err?.message || 'unknown error';
+        this.snackBar.open(`Trim failed: ${msg}`, '', { duration: 4000, panelClass: 'snack-error' });
       }
     });
   }
@@ -2220,6 +2201,36 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         }
       });
     }
+  }
+
+  downloadCurrentFrame(): void {
+    const video = this.videoPlayerRef?.nativeElement;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      this.snackBar.open('Video chưa sẵn sàng để chụp frame', '', { duration: 2000, panelClass: 'snack-error' });
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        this.snackBar.open('Không thể tạo ảnh frame', '', { duration: 3000, panelClass: 'snack-error' });
+        return;
+      }
+      const baseName = this.video?.original_name?.replace(/\.[^.]+$/, '') || 'frame';
+      const timeLabel = video.currentTime.toFixed(2).replace('.', '-');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${baseName}_frame_${timeLabel}s.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
   }
 
   downloadVideoFile(): void {

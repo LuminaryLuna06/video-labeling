@@ -25,11 +25,23 @@ export class VideoService {
   }
 
   /**
-   * Trim a source video via DAM and return the trimmed bytes.
-   * Caller is responsible for wrapping the Blob in a File and calling uploadVideo().
+   * Trim a source video via the backend. Backend asks dam_server to encode
+   * (using the DAM URL the user configured in Settings) and saves the
+   * result. Returns the new VideoItem record.
    */
-  trimVideo(videoUrl: string, cutRanges: { start_sec: number; end_sec: number }[]): Observable<Blob> {
-    return this.dam.trimVideo(videoUrl, cutRanges);
+  trimVideo(opts: {
+    sourceVideoId: string;
+    cutRanges: { start_sec: number; end_sec: number }[];
+    targetName?: string;
+    durationHint?: number;
+  }): Observable<VideoItem> {
+    return this.http.post<VideoItem>(`${this.API}/trim`, {
+      source_video_id: opts.sourceVideoId,
+      cut_ranges: opts.cutRanges,
+      target_name: opts.targetName,
+      duration_hint: opts.durationHint,
+      dam_url: this.dam.getDamUrl(),
+    });
   }
 
   getProjectVideos(projectId: string): Observable<VideoItem[]> {

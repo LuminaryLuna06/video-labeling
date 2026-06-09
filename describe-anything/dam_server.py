@@ -717,7 +717,7 @@ async def get_embedding(request: EmbedRequest):
 
 
 @app.post("/scene-detect")
-async def detect_scenes_endpoint(req: SceneDetectRequest):
+def detect_scenes_endpoint(req: SceneDetectRequest):
     temp_video_path = None
     try:
         # Download
@@ -844,30 +844,6 @@ def _has_audio(path: str) -> bool:
     return bool(out.stdout.strip())
 
 
-def _build_filter_complex(keeps: List[tuple[float, float]], with_audio: bool) -> tuple[str, List[str]]:
-    """Build a `-filter_complex` arg and the corresponding `-map` args."""
-    parts: List[str] = []
-    concat_inputs: List[str] = []
-    for i, (s, e) in enumerate(keeps):
-        parts.append(
-            f"[0:v]trim=start={s}:end={e},setpts=PTS-STARTPTS[v{i}]"
-        )
-        concat_inputs.append(f"[v{i}]")
-        if with_audio:
-            parts.append(
-                f"[0:a]atrim=start={s}:end={e},asetpts=PTS-STARTPTS[a{i}]"
-            )
-            concat_inputs.append(f"[a{i}]")
-    n = len(keeps)
-    if with_audio:
-        parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=1[outv][outa]")
-        maps = ["-map", "[outv]", "-map", "[outa]"]
-    else:
-        parts.append(f"{''.join(concat_inputs)}concat=n={n}:v=1:a=0[outv]")
-        maps = ["-map", "[outv]"]
-    return ";".join(parts), maps
-
-
 @app.post("/trim")
 async def trim_video(req: TrimRequest):
     if not req.cut_ranges:
@@ -875,6 +851,8 @@ async def trim_video(req: TrimRequest):
 
     src_path = None
     out_path = None
+    seg_paths: List[str] = []
+    list_path = None
     try:
         # 1. Download source
         try:
@@ -901,28 +879,49 @@ async def trim_video(req: TrimRequest):
         if not keeps:
             return JSONResponse(status_code=400, content={"error": "nothing left after cuts"})
 
-        # 4. Run ffmpeg
-        filter_str, maps = _build_filter_complex(keeps, with_audio)
-        out_fd, out_path = tempfile.mkstemp(suffix=".mp4")
-        os.close(out_fd)
-        cmd = [
-            "ffmpeg", "-y", "-i", src_path,
-            "-filter_complex", filter_str,
-            *maps,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-        ]
-        if with_audio:
-            cmd += ["-c:a", "aac"]
-        cmd.append(out_path)
+        # 4. Encode each keep range as a segment via NVDEC + NVENC.
+        #    `-ss` AFTER `-i` keeps frame-accurate trimming; CUDA decode is cheap.
+        for i, (s, e) in enumerate(keeps):
+            seg_fd, seg_path = tempfile.mkstemp(suffix=".mp4", prefix=f"trim_seg_{i}_")
+            os.close(seg_fd)
+            seg_paths.append(seg_path)
+            cmd = [
+                "ffmpeg", "-y",
+                "-hwaccel", "cuda",
+                "-hwaccel_output_format", "cuda",
+                "-i", src_path,
+                "-ss", f"{s}", "-to", f"{e}",
+                "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20",
+            ]
+            if with_audio:
+                cmd += ["-c:a", "aac"]
+            cmd.append(seg_path)
+            print(f"[trim] Segment {i+1}/{len(keeps)} [{s:.3f}-{e:.3f}] -> {seg_path}")
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                tail = (proc.stderr or "")[-500:]
+                return JSONResponse(status_code=500, content={"error": f"ffmpeg segment {i} failed: {tail}"})
 
-        print(f"[trim] Running: {' '.join(cmd)}")
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        # 5. Concat segments via the concat demuxer with stream-copy.
+        list_fd, list_path = tempfile.mkstemp(suffix=".txt", prefix="trim_list_")
+        with os.fdopen(list_fd, "w") as f:
+            for p in seg_paths:
+                f.write(f"file '{p}'\n")
+
+        out_fd, out_path = tempfile.mkstemp(suffix=".mp4", prefix="trim_out_")
+        os.close(out_fd)
+        concat_cmd = [
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", list_path, "-c", "copy", out_path,
+        ]
+        print(f"[trim] Concat {len(seg_paths)} segments -> {out_path}")
+        proc = subprocess.run(concat_cmd, capture_output=True, text=True)
         if proc.returncode != 0:
             tail = (proc.stderr or "")[-500:]
-            return JSONResponse(status_code=500, content={"error": f"ffmpeg failed: {tail}"})
+            return JSONResponse(status_code=500, content={"error": f"ffmpeg concat failed: {tail}"})
 
-        # 5. Stream back, deleting out_path after the body is fully sent
-        def file_iter(path: str):
+        # 6. Stream back; transfer ownership of out + seg + list files to the iterator.
+        def file_iter(path: str, to_delete: List[str]):
             try:
                 with open(path, "rb") as f:
                     while True:
@@ -931,14 +930,20 @@ async def trim_video(req: TrimRequest):
                             break
                         yield chunk
             finally:
-                try:
-                    os.remove(path)
-                except Exception as e:
-                    print(f"[trim] warning: failed to delete {path}: {e}")
+                for p in [path, *to_delete]:
+                    try:
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except Exception as e:
+                        print(f"[trim] warning: failed to delete {p}: {e}")
+
         out_to_stream = out_path
-        out_path = None  # ownership transferred to file_iter; skip outer cleanup
+        tail_files = [*seg_paths, list_path]
+        out_path = None
+        seg_paths = []
+        list_path = None
         return StreamingResponse(
-            file_iter(out_to_stream),
+            file_iter(out_to_stream, tail_files),
             media_type="video/mp4",
             headers={"Content-Disposition": 'attachment; filename="trimmed.mp4"'}
         )
@@ -953,6 +958,17 @@ async def trim_video(req: TrimRequest):
                 os.remove(src_path)
             except Exception as e:
                 print(f"[trim] warning: failed to delete {src_path}: {e}")
+        for p in seg_paths:
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {p}: {e}")
+        if list_path and os.path.exists(list_path):
+            try:
+                os.remove(list_path)
+            except Exception as e:
+                print(f"[trim] warning: failed to delete {list_path}: {e}")
         if out_path and os.path.exists(out_path):
             try:
                 os.remove(out_path)
