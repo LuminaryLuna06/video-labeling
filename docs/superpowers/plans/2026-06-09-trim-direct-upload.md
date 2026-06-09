@@ -16,6 +16,8 @@
 - NVENC params: keep current `-preset p4 -cq 20` (already in place from commit 7f8f6c8)
 - Rate limit: deferred to future work; semaphore is the only concurrency control in this iteration
 
+**Execution note (2026-06-09):** Implementation was committed in `f26074d` and pushed to `origin/main`. Automated checks passed (`npx tsc --noEmit`, dam_server import smoke with `JWT_SECRET=test`, JWT helper smoke, and syntax compile). Manual browser/E2E checks with the real backend secret remain open.
+
 ---
 
 ## File Structure
