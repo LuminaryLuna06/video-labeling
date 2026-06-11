@@ -58,6 +58,30 @@
     </button>
   </div>
 
+  <!-- Duration Stats Bar -->
+  <div class="duration-stats" *ngIf="durationStats !== null">
+    <div class="duration-card">
+      <span class="duration-count">{{ durationStats!.S }}</span>
+      <span class="duration-label">S</span>
+      <span class="duration-range">30s – 1m</span>
+    </div>
+    <div class="duration-card">
+      <span class="duration-count">{{ durationStats!.M }}</span>
+      <span class="duration-label">M</span>
+      <span class="duration-range">1m – 5m</span>
+    </div>
+    <div class="duration-card">
+      <span class="duration-count">{{ durationStats!.L }}</span>
+      <span class="duration-label">L</span>
+      <span class="duration-range">5m – 10m</span>
+    </div>
+    <div class="duration-card total">
+      <span class="duration-count">{{ durationStats!.S + durationStats!.M + durationStats!.L }}</span>
+      <span class="duration-label">Total</span>
+      <span class="duration-range">S + M + L</span>
+    </div>
+  </div>
+
   <!-- Loading -->
   <div *ngIf="loading" class="loading-container">
     <mat-spinner diameter="40"></mat-spinner>

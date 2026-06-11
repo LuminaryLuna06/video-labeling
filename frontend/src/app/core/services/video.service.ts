@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { VideoItem, VideoSegment, ObjectRegion, SegmentationResponse, Caption, Category } from '../models';
+import { VideoItem, VideoSegment, ObjectRegion, SegmentationResponse, Caption, Category, DurationStats } from '../models';
 import { DamService } from './dam.service';
 
 @Injectable({ providedIn: 'root' })
@@ -10,6 +10,7 @@ export class VideoService {
   private readonly SEGMENTS_API = '/api/segments';
   private readonly ANNOTATIONS_API = '/api/annotations';
   private readonly CATEGORIES_API = '/api/categories';
+  private readonly STATS_API = '/api/stats';
 
   constructor(private http: HttpClient, private dam: DamService) {}
 
@@ -282,6 +283,11 @@ export class VideoService {
       top_k: topK
     });
   }
+
+  getVideoDurationStats(): Observable<DurationStats> {
+    return this.http.get<DurationStats>(`${this.STATS_API}/video-duration`);
+  }
+
 }
 
 // ---- Types for AI Processing ----
