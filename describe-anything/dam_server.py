@@ -298,16 +298,6 @@ async def lifespan(app: FastAPI):
     sam2_checkpoint = getattr(app, '_sam2_checkpoint', None) or os.getenv('SAM2_CHECKPOINT', '')
     sam2_config = getattr(app, '_sam2_config', None) or os.getenv('SAM2_CONFIG', '')
 
-    if not sam2_checkpoint:
-        # Try common paths (same as demo_video.py default)
-        for p in [
-            'checkpoints/sam2.1_hiera_large.pt',
-            'checkpoints/sam2.1_hiera_small.pt',
-        ]:
-            if os.path.exists(p):
-                sam2_checkpoint = p
-                break
-
     # Auto-detect config YAML based on checkpoint name (like demo_video.py)
     if sam2_checkpoint and not sam2_config:
         ckpt_name = os.path.basename(sam2_checkpoint).lower()
