@@ -283,6 +283,7 @@ export class VideoService {
       top_k: topK
     });
   }
+
   getVideoDurationStats(): Observable<DurationStats> {
     return this.http.get<DurationStats>(`${this.STATS_API}/video-duration`);
   }
