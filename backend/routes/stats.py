@@ -48,7 +48,7 @@ def video_duration_stats():
             bucket = r['_id']
             if bucket in stats:
                 stats[bucket] = r['count']
-        stats['total'] = sum(stats.values())
+        stats['total'] = stats['S'] + stats['M'] + stats['L']
         return jsonify(stats)
 
     except Exception as e:
