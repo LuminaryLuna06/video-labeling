@@ -308,3 +308,11 @@ export interface ImagePendingReviewItem {
   project_name: string;
   created_at: string;
 }
+
+export interface DurationStats {
+  S: number;
+  M: number;
+  L: number;
+  other: number;
+  total: number;
+}
