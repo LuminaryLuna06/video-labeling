@@ -18,7 +18,7 @@ import { AuthService } from '../../core/services/auth.service';
 import { ProjectService } from '../../core/services/project.service';
 import { VideoService } from '../../core/services/video.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
-import { Project } from '../../core/models';
+import { Project, DurationStats } from '../../core/models';
 
 @Component({
   selector: 'app-dashboard',
@@ -35,6 +35,7 @@ import { Project } from '../../core/models';
 export class DashboardComponent implements OnInit {
   projects: Project[] = [];
   loading = true;
+  durationStats: DurationStats | null = null;
   showCreateDialog = false;
   newProjectName = '';
   newProjectDesc = '';
@@ -64,6 +65,14 @@ export class DashboardComponent implements OnInit {
 
   ngOnInit(): void {
     this.loadProjects();
+    this.loadDurationStats();
+  }
+
+  loadDurationStats(): void {
+    this.videoService.getVideoDurationStats().subscribe({
+      next: (stats) => { this.durationStats = stats; },
+      error: () => { /* silent fail — stats bar stays hidden */ }
+    });
   }
 
   loadProjects(): void {
