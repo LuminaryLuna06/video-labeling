@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
 """
-02_enrich.py — Gọi GPT (gpt-5.4-mini) để bổ sung mô tả cho các KB nodes trống.
+02_enrich.py — Gọi GPT song song với rate-limit-safe để bổ sung mô tả cho KB nodes.
 
 Cách chạy:
-    uv run python src/kb_standardizer/02_enrich.py --input output/kb_export_20260612_120000.yaml
-    uv run python src/kb_standardizer/02_enrich.py --input output/kb_export_20260612_120000.yaml --max 5
+    uv run python src/kb_standardizer/02_enrich.py                  # tự chọn file mới nhất
+    uv run python src/kb_standardizer/02_enrich.py --max 10         # test 10 nodes
+    uv run python src/kb_standardizer/02_enrich.py --workers 5      # 5 concurrent (default)
 
-Kết quả: output/kb_enriched_YYYYMMDD_HHMMSS.yaml + báo cáo token & chi phí
+Rate limit an toàn (OpenAI Tier 1 - gpt-5.4-mini):
+    RPM: 500 req/phút  → mỗi worker cách nhau tối thiểu 120ms
+    TPM: 200,000 tok/phút → với ~2000 tok/node, tối đa ~100 nodes/phút an toàn
+    Cơ chế: semaphore + exponential backoff khi gặp 429
+
+Kết quả:
+    - Ghi YAML 1 lần duy nhất khi toàn bộ xong (không lock file)
+    - Báo cáo tổng token (input + output) chính xác từ usage thực
 """
 
 import argparse
+import asyncio
 import json
 import os
+import random
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -24,7 +33,7 @@ if sys.platform == "win32":
 
 import yaml
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AsyncOpenAI, RateLimitError, APIStatusError
 
 # Load .env từ thư mục kb_standardizer (cha của src/)
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
@@ -35,6 +44,17 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 # Chi phí theo giá gpt-5.4-mini
 PRICE_INPUT_PER_1M = 0.75    # USD / 1M input tokens
 PRICE_OUTPUT_PER_1M = 4.50   # USD / 1M output tokens
+
+# Rate limit constants (OpenAI Tier 1)
+# TPM = 200,000 → với ~2,000 tok/node → tối đa ~100 nodes/60s
+# RPM = 500 → rất thoải mái
+# Để an toàn, giới hạn ~80 nodes/phút → delay 750ms giữa các request
+MIN_REQUEST_DELAY_S = 0.75   # ms delay tối thiểu giữa các request khi acquire semaphore
+
+# Retry config
+MAX_RETRIES = 5
+RETRY_BASE_DELAY = 2.0       # giây — base cho exponential backoff
+RETRY_MAX_DELAY = 60.0       # giây — cap tối đa
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 OUTPUT_DIR = Path(__file__).parent.parent.parent / "output"
@@ -55,52 +75,76 @@ CATEGORY_PROMPT_MAP = {
     "L": "L_video_dac_biet.md",
 }
 
+# Cache prompt đã load — tránh đọc file lặp lại khi chạy song song
+_prompt_cache: dict[str, str | None] = {}
+
 
 # ===================== LOAD PROMPT =====================
 
 def load_prompt(category_hint: str) -> str | None:
     """
-    Load prompt hệ thống = SYSTEM_BASE.md (quy tắc chung) + prompt danh mục cụ thể.
-    SYSTEM_BASE.md được ghép vào đầu để GPT hiểu toàn bộ bức tranh 12 danh mục.
+    Load prompt = SYSTEM_BASE.md + prompt danh mục cụ thể.
+    Kết quả được cache trong memory.
     """
     if not category_hint or category_hint.startswith("UNKNOWN"):
         return None
 
-    # Lấy chữ cái đầu tiên (A, B, C, ...)
     letter = category_hint.strip()[0].upper()
+
+    if letter in _prompt_cache:
+        return _prompt_cache[letter]
+
     prompt_file = CATEGORY_PROMPT_MAP.get(letter)
     if not prompt_file:
+        _prompt_cache[letter] = None
         return None
 
     prompt_path = PROMPTS_DIR / prompt_file
     if not prompt_path.exists():
         print(f"  ⚠️  Không tìm thấy file prompt: {prompt_path}")
+        _prompt_cache[letter] = None
         return None
 
-    # Ghép SYSTEM_BASE.md (quy tắc chung) + prompt danh mục cụ thể
     system_base_path = PROMPTS_DIR / "SYSTEM_BASE.md"
     category_prompt = prompt_path.read_text(encoding="utf-8")
 
     if system_base_path.exists():
         base_prompt = system_base_path.read_text(encoding="utf-8")
-        return (
+        full_prompt = (
             base_prompt
             + "\n\n---\n\n"
             + "## Hướng dẫn cụ thể cho danh mục này\n\n"
             + category_prompt
         )
     else:
-        return category_prompt
+        full_prompt = category_prompt
+
+    _prompt_cache[letter] = full_prompt
+    return full_prompt
 
 
-# ===================== GPT CALL =====================
+# ===================== GPT CALL (ASYNC + RETRY) =====================
 
-def call_gpt(client: OpenAI, node: dict, system_prompt: str) -> dict | None:
+async def call_gpt_with_retry(
+    client: AsyncOpenAI,
+    node: dict,
+    system_prompt: str,
+    semaphore: asyncio.Semaphore,
+    index: int,
+    total: int,
+    counter: list,
+    lock: asyncio.Lock,
+    request_throttle: asyncio.Lock,
+) -> dict:
     """
-    Gọi GPT để sinh ra 4 trường description.
-    Trả về dict với keys: description, description_vi, description_graph, description_graph_vi.
-    Trả về None nếu lỗi.
+    Gọi GPT bất đồng bộ với:
+    - Semaphore để giới hạn số lượng concurrent calls
+    - Throttle delay tối thiểu giữa các request (tránh TPM limit)
+    - Exponential backoff khi gặp RateLimitError (429)
     """
+    kb_id = node.get("kb_id", "?")
+    name = node.get("name", "?")
+
     user_message = f"""Thông tin node cần viết mô tả:
 - Tên (EN): {node.get("name", "")}
 - Tên (VI): {node.get("name_vi", "")}
@@ -117,39 +161,93 @@ Trả về JSON (không markdown code block, chỉ JSON thuần):
   "description_graph_vi": "..."
 }}"""
 
-    try:
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.4,
-            max_tokens=1200,
-            response_format={"type": "json_object"},
-        )
+    async with semaphore:
+        # Throttle: đảm bảo delay tối thiểu giữa các request để tránh TPM spike
+        async with request_throttle:
+            await asyncio.sleep(MIN_REQUEST_DELAY_S)
 
-        content = response.choices[0].message.content
-        usage = response.usage
+        # Retry loop với exponential backoff
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await client.chat.completions.create(
+                    model=OPENAI_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    temperature=0.4,
+                    max_completion_tokens=1200,
+                    response_format={"type": "json_object"},
+                )
 
-        result = json.loads(content)
-        return {
-            "result": result,
-            "prompt_tokens": usage.prompt_tokens,
-            "completion_tokens": usage.completion_tokens,
-        }
-    except json.JSONDecodeError as e:
-        print(f"  ❌ Lỗi parse JSON: {e}")
-        return None
-    except Exception as e:
-        print(f"  ❌ Lỗi gọi GPT: {e}")
-        return None
+                content = response.choices[0].message.content
+                usage = response.usage
+
+                # Đảm bảo usage không None
+                input_tokens = usage.prompt_tokens if usage else 0
+                output_tokens = usage.completion_tokens if usage else 0
+
+                result = json.loads(content)
+
+                async with lock:
+                    counter[0] += 1
+                    done = counter[0]
+
+                print(
+                    f"  [{done:>3}/{total}] ✅ {name[:35]:<35} "
+                    f"| {input_tokens:>5} in / {output_tokens:>4} out tok"
+                )
+
+                return {
+                    "index": index,
+                    "result": result,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "error": False,
+                }
+
+            except RateLimitError as e:
+                # 429 — đợi rồi retry
+                delay = min(RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), RETRY_MAX_DELAY)
+                print(f"  ⏳ [{name[:25]}] Rate limit (attempt {attempt+1}/{MAX_RETRIES}), đợi {delay:.1f}s...")
+                await asyncio.sleep(delay)
+
+            except json.JSONDecodeError as e:
+                async with lock:
+                    counter[0] += 1
+                    done = counter[0]
+                print(f"  [{done:>3}/{total}] ❌ {name} ({kb_id}) — Lỗi parse JSON: {e}")
+                return {"index": index, "error": True, "input_tokens": 0, "output_tokens": 0}
+
+            except APIStatusError as e:
+                if e.status_code == 400:
+                    # Bad request — không retry
+                    async with lock:
+                        counter[0] += 1
+                        done = counter[0]
+                    print(f"  [{done:>3}/{total}] ❌ {name} ({kb_id}) — API Error 400: {e.message}")
+                    return {"index": index, "error": True, "input_tokens": 0, "output_tokens": 0}
+                # Lỗi khác — thử retry
+                delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                print(f"  ⏳ [{name[:25]}] API Error {e.status_code} (attempt {attempt+1}/{MAX_RETRIES}), đợi {delay:.1f}s...")
+                await asyncio.sleep(delay)
+
+            except Exception as e:
+                delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+                print(f"  ⏳ [{name[:25]}] Lỗi: {e} (attempt {attempt+1}/{MAX_RETRIES}), đợi {delay:.1f}s...")
+                await asyncio.sleep(delay)
+
+        # Hết retry
+        async with lock:
+            counter[0] += 1
+            done = counter[0]
+        print(f"  [{done:>3}/{total}] ❌ {name} ({kb_id}) — Hết {MAX_RETRIES} lần retry")
+        return {"index": index, "error": True, "input_tokens": 0, "output_tokens": 0}
 
 
-# ===================== ENRICH =====================
+# ===================== NEEDS ENRICHMENT =====================
 
 def needs_enrichment(node: dict) -> bool:
-    """Kiểm tra node có cần bổ sung mô tả không."""
     return (
         not node.get("description")
         or not node.get("description_vi")
@@ -158,82 +256,131 @@ def needs_enrichment(node: dict) -> bool:
     )
 
 
-def enrich_nodes(input_file: Path, max_nodes: int | None = None):
-    """Đọc YAML, gọi GPT bổ sung, xuất file mới."""
+# ===================== MAIN ENRICH (ASYNC) =====================
+
+async def enrich_nodes_async(input_file: Path, max_nodes: int | None = None, workers: int = 5):
+    """
+    Đọc YAML, gọi GPT song song với rate-limit protection,
+    gom kết quả trong memory, ghi YAML 1 lần duy nhất khi xong.
+    """
     with open(input_file, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     nodes = data.get("nodes", [])
     print(f"📂 Đọc {len(nodes)} nodes từ {input_file.name}")
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    # Lọc nodes cần xử lý
+    to_process_indices = [i for i, n in enumerate(nodes) if needs_enrichment(n)]
+    skipped = len(nodes) - len(to_process_indices)
 
-    # Thống kê token
+    if max_nodes:
+        to_process_indices = to_process_indices[:max_nodes]
+
+    total = len(to_process_indices)
+    print(f"🎯 Cần làm giàu   : {total} nodes")
+    print(f"⏭️  Bỏ qua (đủ rồi): {skipped} nodes")
+    print(f"⚡ Concurrent workers: {workers}")
+    print(f"⏱️  Throttle delay  : {MIN_REQUEST_DELAY_S}s/req (tránh TPM={200_000:,}/phút)")
+    print(f"🔁 Retry           : tối đa {MAX_RETRIES} lần khi gặp 429\n")
+
+    if total == 0:
+        print("✅ Tất cả nodes đã có đủ mô tả — không cần làm gì!")
+        return None
+
+    # Thời gian dự kiến
+    est_seconds = total * MIN_REQUEST_DELAY_S / workers
+    print(f"⏳ Thời gian dự kiến: ~{est_seconds:.0f}s ({est_seconds/60:.1f} phút)\n")
+
+    # Pre-load tất cả prompts vào cache trước khi chạy async
+    categories_needed = set(nodes[i].get("category_hint", "") for i in to_process_indices)
+    for cat in categories_needed:
+        load_prompt(cat)
+
+    # Tạo async client + synchronization primitives
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    semaphore = asyncio.Semaphore(workers)
+    lock = asyncio.Lock()
+    request_throttle = asyncio.Lock()  # serialize request timing
+    counter = [0]
+
+    start_time = asyncio.get_event_loop().time()
+
+    # Tạo và chạy tất cả tasks
+    tasks = []
+    skip_indices = []
+
+    for node_idx in to_process_indices:
+        node = nodes[node_idx]
+        category = node.get("category_hint", "UNKNOWN")
+        system_prompt = load_prompt(category)
+
+        if not system_prompt:
+            print(f"  ⚠️  Bỏ qua '{node.get('name', '?')}' — không có prompt cho '{category}'")
+            skip_indices.append(node_idx)
+            continue
+
+        tasks.append(
+            call_gpt_with_retry(
+                client=client,
+                node=node,
+                system_prompt=system_prompt,
+                semaphore=semaphore,
+                index=node_idx,
+                total=total,
+                counter=counter,
+                lock=lock,
+                request_throttle=request_throttle,
+            )
+        )
+
+    # Chạy song song, thu kết quả khi mỗi task xong
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    elapsed = asyncio.get_event_loop().time() - start_time
+
+    # ===================== GOM KẾT QUẢ VÀO MEMORY =====================
     total_input_tokens = 0
     total_output_tokens = 0
     processed = 0
-    skipped = 0
-    errors = 0
+    errors = len(skip_indices)  # nodes bị bỏ qua do thiếu prompt
 
-    to_process = [n for n in nodes if needs_enrichment(n)]
-    if max_nodes:
-        to_process = to_process[:max_nodes]
-
-    print(f"🎯 Cần làm giàu: {len(to_process)} nodes\n")
-
-    for i, node in enumerate(nodes):
-        if not needs_enrichment(node):
-            skipped += 1
-            continue
-
-        # Kiểm tra đã được xử lý trong batch này chưa
-        if processed >= len(to_process):
-            break
-
-        kb_id = node.get("kb_id", "?")
-        name = node.get("name", "?")
-        category = node.get("category_hint", "UNKNOWN")
-        print(f"[{processed + 1}/{len(to_process)}] 🔄 {name} ({kb_id}) — {category}")
-
-        # Load prompt phù hợp
-        system_prompt = load_prompt(category)
-        if not system_prompt:
-            print(f"  ⚠️  Không có prompt cho danh mục '{category}' — bỏ qua")
+    for res in results:
+        if isinstance(res, Exception):
             errors += 1
-            processed += 1
             continue
 
-        # Gọi GPT
-        gpt_resp = call_gpt(client, node, system_prompt)
-        if gpt_resp is None:
+        if res.get("error"):
             errors += 1
-            processed += 1
             continue
 
-        result = gpt_resp["result"]
-        total_input_tokens += gpt_resp["prompt_tokens"]
-        total_output_tokens += gpt_resp["completion_tokens"]
+        node_idx = res["index"]
+        node = nodes[node_idx]
+        gpt_result = res.get("result", {})
 
-        # Cập nhật vào node — chỉ ghi đè trường đang trống
+        # Chỉ điền trường còn trống — không overwrite dữ liệu cũ
         for field in ["description", "description_vi", "description_graph", "description_graph_vi"]:
-            if not node.get(field) and result.get(field):
-                node[field] = result[field]
+            if not node.get(field) and gpt_result.get(field):
+                node[field] = gpt_result[field]
 
+        # Cộng token chính xác từ usage thực
+        total_input_tokens += res["input_tokens"]
+        total_output_tokens += res["output_tokens"]
         processed += 1
-        print(f"  ✅ Xong | tokens: +{gpt_resp['prompt_tokens']} in / +{gpt_resp['completion_tokens']} out")
 
-        # Delay nhỏ để tránh rate limit
-        if processed < len(to_process):
-            time.sleep(0.5)
-
-    # Xuất file kết quả
+    # ===================== GHI FILE YAML 1 LẦN DUY NHẤT =====================
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = OUTPUT_DIR / f"kb_enriched_{timestamp}.yaml"
 
     data["metadata"]["enriched_at"] = datetime.now().isoformat()
-    data["metadata"]["nodes_enriched"] = processed - errors
+    data["metadata"]["nodes_enriched"] = processed
+    data["metadata"]["nodes_skipped"] = skipped
+    data["metadata"]["nodes_errors"] = errors
     data["metadata"]["model_used"] = OPENAI_MODEL
+    data["metadata"]["workers"] = workers
+    data["metadata"]["total_input_tokens"] = total_input_tokens
+    data["metadata"]["total_output_tokens"] = total_output_tokens
+    data["metadata"]["elapsed_seconds"] = round(elapsed, 1)
 
     with open(output_file, "w", encoding="utf-8") as f:
         yaml.dump(
@@ -249,50 +396,63 @@ def enrich_nodes(input_file: Path, max_nodes: int | None = None):
     cost_input = (total_input_tokens / 1_000_000) * PRICE_INPUT_PER_1M
     cost_output = (total_output_tokens / 1_000_000) * PRICE_OUTPUT_PER_1M
     total_cost = cost_input + cost_output
+    throughput = processed / (elapsed / 60) if elapsed > 0 else 0
 
-    print("\n" + "=" * 40)
-    print("   ====== TOKEN USAGE REPORT ======")
+    print("\n" + "=" * 52)
+    print("         ====== TOKEN USAGE REPORT ======")
+    print("=" * 52)
     print(f"   Model             : {OPENAI_MODEL}")
-    print(f"   Nodes processed   : {processed - errors}")
+    print(f"   Workers parallel  : {workers}")
+    print(f"   Elapsed time      : {elapsed:.1f}s ({elapsed/60:.1f} phút)")
+    print(f"   Throughput        : {throughput:.1f} nodes/phút")
+    print("   " + "-" * 48)
+    print(f"   Nodes processed   : {processed}")
     print(f"   Nodes skipped     : {skipped} (đã có đủ mô tả)")
     print(f"   Nodes errors      : {errors}")
-    print(f"   Input tokens      : {total_input_tokens:,}")
-    print(f"   Output tokens     : {total_output_tokens:,}")
-    print(f"   Total tokens      : {total_input_tokens + total_output_tokens:,}")
-    print(f"   Est. cost (USD)   : ${total_cost:.4f}")
-    print(f"   (gpt-5.4-mini: ${PRICE_INPUT_PER_1M}/1M in, ${PRICE_OUTPUT_PER_1M}/1M out)")
-    print("=" * 40)
+    print("   " + "-" * 48)
+    print(f"   Input tokens      : {total_input_tokens:>10,}")
+    print(f"   Output tokens     : {total_output_tokens:>10,}")
+    print(f"   TOTAL tokens      : {total_input_tokens + total_output_tokens:>10,}")
+    print("   " + "-" * 48)
+    print(f"   Cost input        : ${cost_input:>8.4f}")
+    print(f"   Cost output       : ${cost_output:>8.4f}")
+    print(f"   TOTAL COST (USD)  : ${total_cost:>8.4f}")
+    print(f"   (Giá: ${PRICE_INPUT_PER_1M}/1M in · ${PRICE_OUTPUT_PER_1M}/1M out)")
+    print("=" * 52)
 
-    print(f"\n✅ Đã lưu kết quả → {output_file}")
-    print(f"📝 Bước tiếp theo:")
-    print(f"   1. Review file YAML trên, kiểm tra chất lượng mô tả")
-    print(f"   2. Chỉnh sửa nếu cần, sau đó chạy:")
-    print(f"      uv run python src/kb_standardizer/03_import.py --input {output_file.name}")
+    print(f"\n✅ Đã lưu kết quả → {output_file.name}")
     return output_file
 
 
 # ===================== MAIN =====================
 
 def find_latest_file(pattern: str) -> Path | None:
-    """Tìm file YAML mới nhất trong output/ khớp với pattern (vd: 'kb_export_*.yaml')."""
+    """Tìm file YAML mới nhất trong output/ khớp với pattern."""
     files = sorted(OUTPUT_DIR.glob(pattern), reverse=True)
     return files[0] if files else None
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Gọi GPT bổ sung mô tả cho KB nodes từ file YAML")
+    parser = argparse.ArgumentParser(
+        description="Gọi GPT song song (rate-limit-safe) để bổ sung mô tả cho KB nodes"
+    )
     parser.add_argument(
         "--input",
         type=str,
         default=None,
-        help="Tên file YAML trong thư mục output/ (vd: kb_export_20260612_120000.yaml). "
-             "Nếu bỏ trống, tự động chọn file kb_export_*.yaml mới nhất.",
+        help="Tên file YAML trong thư mục output/. Nếu bỏ trống, tự chọn kb_export_*.yaml mới nhất.",
     )
     parser.add_argument(
         "--max",
         type=int,
         default=None,
-        help="Số lượng node tối đa cần xử lý (để test thử). Mặc định: tất cả",
+        help="Số lượng node tối đa (để test). Mặc định: tất cả",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=5,
+        help="Số concurrent GPT calls (default: 5). Tier1 TPM=200K → ~100 nodes/phút an toàn",
     )
     args = parser.parse_args()
 
@@ -306,7 +466,6 @@ def main():
         if not input_path.is_absolute():
             input_path = OUTPUT_DIR / input_path
     else:
-        # Tự động tìm file kb_export_*.yaml mới nhất
         input_path = find_latest_file("kb_export_*.yaml")
         if not input_path:
             print("❌ Không tìm thấy file kb_export_*.yaml nào trong output/")
@@ -318,9 +477,15 @@ def main():
         print(f"❌ Không tìm thấy file: {input_path}")
         sys.exit(1)
 
-    print(f"🚀 Bắt đầu làm giàu dữ liệu với model: {OPENAI_MODEL}")
-    print(f"📂 Input: {input_path.name}")
-    enrich_nodes(input_path, max_nodes=args.max)
+    print(f"🚀 Model: {OPENAI_MODEL} | Input: {input_path.name}\n")
+
+    asyncio.run(
+        enrich_nodes_async(
+            input_file=input_path,
+            max_nodes=args.max,
+            workers=args.workers,
+        )
+    )
 
 
 if __name__ == "__main__":
