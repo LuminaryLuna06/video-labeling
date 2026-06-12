@@ -63,59 +63,71 @@ def fetch_all_nodes(token: str) -> list[dict]:
 
 def detect_category(node: dict, all_nodes: list[dict]) -> str:
     """
-    Tự động phát hiện danh mục của node dựa vào parent_id hoặc tags.
-    Trả về chuỗi gợi ý như 'G. Ẩm thực Hà Nội'.
+    Tự động phát hiện danh mục của node bằng cách leo ngược cây KB.
+    Thứ tự ưu tiên:
+    1. Leo lên cây cha đến root → khớp từ khoá với từng ancestor
+    2. So khớp từ khoá trong tên node (EN + VI)
+    3. Fallback tags
+    4. UNKNOWN
     """
-    # Lấy thông tin cha để suy luận danh mục
-    parent_id = node.get("parent_id")
-    if parent_id:
-        parent = next((n for n in all_nodes if n.get("id") == parent_id), None)
-        if parent:
-            parent_name = parent.get("name", "")
-            parent_vi = parent.get("name_vi", "")
-            # Map tên cha → danh mục
-            category_map = {
-                "Di tích lịch sử": "A. Di tích lịch sử - Văn hoá",
-                "Historical": "A. Di tích lịch sử - Văn hoá",
-                "Hồ": "B. Hồ - Công viên - Cảnh quan",
-                "Công viên": "B. Hồ - Công viên - Cảnh quan",
-                "Lake": "B. Hồ - Công viên - Cảnh quan",
-                "Park": "B. Hồ - Công viên - Cảnh quan",
-                "Bảo tàng": "C. Bảo tàng",
-                "Museum": "C. Bảo tàng",
-                "Nghệ thuật biểu diễn": "D. Nghệ thuật biểu diễn",
-                "Performing Arts": "D. Nghệ thuật biểu diễn",
-                "Lễ hội": "E. Lễ hội - Sự kiện",
-                "Festival": "E. Lễ hội - Sự kiện",
-                "Làng nghề": "F. Làng nghề truyền thống",
-                "Craft Village": "F. Làng nghề truyền thống",
-                "Ẩm thực": "G. Ẩm thực Hà Nội",
-                "Food": "G. Ẩm thực Hà Nội",
-                "Cuisine": "G. Ẩm thực Hà Nội",
-                "Hoạt động": "H. Hoạt động du lịch & Giải trí",
-                "Activity": "H. Hoạt động du lịch & Giải trí",
-                "Thiên nhiên": "I. Thiên nhiên & Ngoại thành",
-                "Nature": "I. Thiên nhiên & Ngoại thành",
-                "Người dân": "J. Người dân & Văn hoá sống",
-                "People": "J. Người dân & Văn hoá sống",
-                "Bốn mùa": "K. Bốn mùa Hà Nội",
-                "Season": "K. Bốn mùa Hà Nội",
-                "Video đặc biệt": "L. Video đặc biệt",
-                "Special": "L. Video đặc biệt",
-            }
-            for key, cat in category_map.items():
-                if key.lower() in parent_name.lower() or key.lower() in parent_vi.lower():
-                    return cat
+    # Tạo index để tra nhanh theo id
+    id_index = {n.get("id"): n for n in all_nodes if n.get("id")}
 
-    # Fallback: dùng tags
-    tags = node.get("tags", [])
-    for tag in tags:
-        if "ẩm thực" in tag.lower() or "food" in tag.lower():
-            return "G. Ẩm thực Hà Nội"
-        if "lễ hội" in tag.lower() or "festival" in tag.lower():
-            return "E. Lễ hội - Sự kiện"
-        if "bảo tàng" in tag.lower() or "museum" in tag.lower():
-            return "C. Bảo tàng"
+    # Map từ khóa → danh mục (ưu tiên từ dài đến ngắn)
+    KEYWORD_MAP = [
+        ("A. Di tích lịch sử - Văn hoá",   ["di tích", "lịch sử", "historic", "heritage", "monument", "communal house", "đình", "đền", "chùa", "miếu", "thành", "lăng", "bia", "pagoda", "temple", "shrine"]),
+        ("B. Hồ - Công viên - Cảnh quan",   ["hồ", "công viên", "cảnh quan", "lake", "park", "garden", "vườn hoa"]),
+        ("C. Bảo tàng",                      ["bảo tàng", "museum"]),
+        ("D. Nghệ thuật biểu diễn",          ["nghệ thuật", "biểu diễn", "performing arts", "ca trù", "chèo", "tuồng", "múa rối", "water puppet", "rối nước", "xẩm"]),
+        ("E. Lễ hội - Sự kiện",              ["lễ hội", "festival", "sự kiện", "hội làng"]),
+        ("F. Làng nghề truyền thống",        ["làng nghề", "craft village", "silk village", "làng lụa", "làng gốm", "làng đúc", "nghề truyền thống", "thủ công"]),
+        ("G. Ẩm thực Hà Nội",               ["ẩm thực", "food", "cuisine", "phở", "bún", "bánh", "chả", "nem", "bia hơi", "cốm", "kem tràng tiền", "quán ăn"]),
+        ("H. Hoạt động du lịch & Giải trí", ["hoạt động du lịch", "giải trí", "activity", "tour", "trải nghiệm", "experience"]),
+        ("I. Thiên nhiên & Ngoại thành",    ["thiên nhiên", "ngoại thành", "nature", "mountain", "núi", "rừng", "thác nước", "national park", "vườn quốc gia"]),
+        ("J. Người dân & Văn hoá sống",     ["người dân", "văn hoá sống", "people", "lifestyle", "community", "phụ nữ", "women"]),
+        ("K. Bốn mùa Hà Nội",              ["bốn mùa", "mùa xuân", "mùa hè", "mùa thu", "mùa đông", "spring", "summer", "autumn", "fall", "winter", "season"]),
+        ("L. Video đặc biệt",               ["video", "tư liệu", "documentary", "special", "đặc biệt"]),
+    ]
+
+    def match_category(text: str) -> str | None:
+        text_lower = text.lower()
+        for category, keywords in KEYWORD_MAP:
+            for kw in keywords:
+                if kw in text_lower:
+                    return category
+        return None
+
+    # Bước 1: Leo cây cha đến root
+    visited = set()
+    current_id = node.get("parent_id")
+    ancestor_chain = []
+
+    while current_id and current_id not in visited:
+        visited.add(current_id)
+        ancestor = id_index.get(current_id)
+        if not ancestor:
+            break
+        ancestor_chain.append(ancestor)
+        current_id = ancestor.get("parent_id")
+
+    # Kiểm tra từ root xuống (ancestor xa nhất trước — thường là danh mục gốc)
+    for ancestor in reversed(ancestor_chain):
+        a_name = ancestor.get("name", "")
+        a_vi = ancestor.get("name_vi", "")
+        cat = match_category(a_name) or match_category(a_vi)
+        if cat:
+            return cat
+
+    # Bước 2: So khớp tên node chính
+    cat = match_category(node.get("name", "")) or match_category(node.get("name_vi", ""))
+    if cat:
+        return cat
+
+    # Bước 3: So khớp tags
+    for tag in node.get("tags", []):
+        cat = match_category(tag)
+        if cat:
+            return cat
 
     return "UNKNOWN — cần gán thủ công"
 

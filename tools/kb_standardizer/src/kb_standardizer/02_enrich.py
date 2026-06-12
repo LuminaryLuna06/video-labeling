@@ -59,7 +59,10 @@ CATEGORY_PROMPT_MAP = {
 # ===================== LOAD PROMPT =====================
 
 def load_prompt(category_hint: str) -> str | None:
-    """Load file prompt phù hợp dựa trên category_hint (vd: 'G. Ẩm thực...' → 'G')."""
+    """
+    Load prompt hệ thống = SYSTEM_BASE.md (quy tắc chung) + prompt danh mục cụ thể.
+    SYSTEM_BASE.md được ghép vào đầu để GPT hiểu toàn bộ bức tranh 12 danh mục.
+    """
     if not category_hint or category_hint.startswith("UNKNOWN"):
         return None
 
@@ -74,7 +77,20 @@ def load_prompt(category_hint: str) -> str | None:
         print(f"  ⚠️  Không tìm thấy file prompt: {prompt_path}")
         return None
 
-    return prompt_path.read_text(encoding="utf-8")
+    # Ghép SYSTEM_BASE.md (quy tắc chung) + prompt danh mục cụ thể
+    system_base_path = PROMPTS_DIR / "SYSTEM_BASE.md"
+    category_prompt = prompt_path.read_text(encoding="utf-8")
+
+    if system_base_path.exists():
+        base_prompt = system_base_path.read_text(encoding="utf-8")
+        return (
+            base_prompt
+            + "\n\n---\n\n"
+            + "## Hướng dẫn cụ thể cho danh mục này\n\n"
+            + category_prompt
+        )
+    else:
+        return category_prompt
 
 
 # ===================== GPT CALL =====================
