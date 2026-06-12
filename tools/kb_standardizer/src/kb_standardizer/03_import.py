@@ -193,6 +193,12 @@ def import_yaml(input_file: Path, dry_run: bool = False):
 
 # ===================== MAIN =====================
 
+def find_latest_file(pattern: str) -> Path | None:
+    """Tìm file YAML mới nhất trong output/ khớp với pattern."""
+    files = sorted(OUTPUT_DIR.glob(pattern), reverse=True)
+    return files[0] if files else None
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Đẩy YAML đã review lên server với double-check an toàn"
@@ -200,8 +206,9 @@ def main():
     parser.add_argument(
         "--input",
         type=str,
-        required=True,
-        help="Tên file YAML trong thư mục output/ (vd: kb_enriched_20260612_120000.yaml)",
+        default=None,
+        help="Tên file YAML trong thư mục output/ (vd: kb_enriched_20260612_120000.yaml). "
+             "Nếu bỏ trống, tự động chọn file kb_enriched_*.yaml mới nhất.",
     )
     parser.add_argument(
         "--dry-run",
@@ -214,9 +221,24 @@ def main():
         print("❌ Thiếu ANNOTATOR_USERNAME hoặc ANNOTATOR_PASSWORD trong .env")
         sys.exit(1)
 
-    input_path = Path(args.input)
-    if not input_path.is_absolute():
-        input_path = OUTPUT_DIR / input_path
+    # Resolve đường dẫn input
+    if args.input:
+        input_path = Path(args.input)
+        if not input_path.is_absolute():
+            input_path = OUTPUT_DIR / input_path
+    else:
+        # Tự động tìm file kb_enriched_*.yaml mới nhất
+        input_path = find_latest_file("kb_enriched_*.yaml")
+        if not input_path:
+            # Fallback: thử tìm kb_export_*.yaml (trường hợp import thẳng từ export)
+            input_path = find_latest_file("kb_export_*.yaml")
+            if not input_path:
+                print("❌ Không tìm thấy file YAML nào trong output/")
+                print("   Hãy chạy trước: uv run python src/kb_standardizer/01_export.py")
+                sys.exit(1)
+            print(f"⚠️  Không có kb_enriched_*.yaml, dùng file export: {input_path.name}")
+        else:
+            print(f"ℹ️  Tự động chọn file mới nhất: {input_path.name}")
 
     if not input_path.exists():
         print(f"❌ Không tìm thấy file: {input_path}")

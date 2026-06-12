@@ -273,13 +273,20 @@ def enrich_nodes(input_file: Path, max_nodes: int | None = None):
 
 # ===================== MAIN =====================
 
+def find_latest_file(pattern: str) -> Path | None:
+    """Tìm file YAML mới nhất trong output/ khớp với pattern (vd: 'kb_export_*.yaml')."""
+    files = sorted(OUTPUT_DIR.glob(pattern), reverse=True)
+    return files[0] if files else None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Gọi GPT bổ sung mô tả cho KB nodes từ file YAML")
     parser.add_argument(
         "--input",
         type=str,
-        required=True,
-        help="Tên file YAML trong thư mục output/ (vd: kb_export_20260612_120000.yaml)",
+        default=None,
+        help="Tên file YAML trong thư mục output/ (vd: kb_export_20260612_120000.yaml). "
+             "Nếu bỏ trống, tự động chọn file kb_export_*.yaml mới nhất.",
     )
     parser.add_argument(
         "--max",
@@ -294,15 +301,25 @@ def main():
         sys.exit(1)
 
     # Resolve đường dẫn input
-    input_path = Path(args.input)
-    if not input_path.is_absolute():
-        input_path = OUTPUT_DIR / input_path
+    if args.input:
+        input_path = Path(args.input)
+        if not input_path.is_absolute():
+            input_path = OUTPUT_DIR / input_path
+    else:
+        # Tự động tìm file kb_export_*.yaml mới nhất
+        input_path = find_latest_file("kb_export_*.yaml")
+        if not input_path:
+            print("❌ Không tìm thấy file kb_export_*.yaml nào trong output/")
+            print("   Hãy chạy trước: uv run python src/kb_standardizer/01_export.py")
+            sys.exit(1)
+        print(f"ℹ️  Tự động chọn file mới nhất: {input_path.name}")
 
     if not input_path.exists():
         print(f"❌ Không tìm thấy file: {input_path}")
         sys.exit(1)
 
     print(f"🚀 Bắt đầu làm giàu dữ liệu với model: {OPENAI_MODEL}")
+    print(f"📂 Input: {input_path.name}")
     enrich_nodes(input_path, max_nodes=args.max)
 
 
