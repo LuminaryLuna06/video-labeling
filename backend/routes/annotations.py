@@ -1038,12 +1038,36 @@ def process_batch_segmented_export(app, task_id, project_id, subpart_id=None):
                 
             videos = list(db.videos.find(query))
             
-            # Filter out videos without segments
+            # Filter videos: must be pending_review or approved, and have all 6 caption fields filled for all segments
             valid_videos = []
             for video in videos:
-                if db.video_segments.count_documents({'video_id': video['_id']}) > 0:
-                    valid_videos.append(video)
+                if video.get('review_status') not in ['pending_review', 'approved']:
+                    continue
+                
+                segments = list(db.video_segments.find({'video_id': video['_id']}))
+                if not segments:
+                    continue
 
+                is_valid = True
+                for seg in segments:
+                    seg_caption = db.captions.find_one({'segment_id': seg['_id'], 'region_id': None})
+                    if not seg_caption:
+                        is_valid = False
+                        break
+                    
+                    if not all([
+                        seg_caption.get('contextual_caption'),
+                        seg_caption.get('contextual_caption_vi'),
+                        seg_caption.get('knowledge_caption'),
+                        seg_caption.get('knowledge_caption_vi'),
+                        seg_caption.get('combined_caption'),
+                        seg_caption.get('combined_caption_vi')
+                    ]):
+                        is_valid = False
+                        break
+                        
+                if is_valid:
+                    valid_videos.append(video)
             total_videos = len(valid_videos)
             if total_videos == 0:
                 with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_STORED) as zipf:
@@ -1354,11 +1378,37 @@ def process_batch_labeled_videos_export(app, task_id, project_id, subpart_id=Non
                 query['subpart_id'] = ObjectId(subpart_id)
             videos = list(db.videos.find(query))
 
-            # Keep only videos that have at least one segment
-            valid_videos = [
-                v for v in videos
-                if db.video_segments.count_documents({'video_id': v['_id']}) > 0
-            ]
+            # Filter videos: must be pending_review or approved, and have all 6 caption fields filled for all segments
+            valid_videos = []
+            for video in videos:
+                if video.get('review_status') not in ['pending_review', 'approved']:
+                    continue
+                
+                segments = list(db.video_segments.find({'video_id': video['_id']}))
+                if not segments:
+                    continue
+
+                is_valid = True
+                for seg in segments:
+                    seg_caption = db.captions.find_one({'segment_id': seg['_id'], 'region_id': None})
+                    if not seg_caption:
+                        is_valid = False
+                        break
+                    
+                    if not all([
+                        seg_caption.get('contextual_caption'),
+                        seg_caption.get('contextual_caption_vi'),
+                        seg_caption.get('knowledge_caption'),
+                        seg_caption.get('knowledge_caption_vi'),
+                        seg_caption.get('combined_caption'),
+                        seg_caption.get('combined_caption_vi')
+                    ]):
+                        is_valid = False
+                        break
+                        
+                if is_valid:
+                    valid_videos.append(video)
+            
             total_videos = len(valid_videos)
 
             # Empty case: still produce a valid zip with empty metadata
