@@ -12,6 +12,8 @@ export interface KBNode {
   children_ids: string[];
   description: string;
   description_vi: string;
+  description_graph: string;
+  description_graph_vi: string;
   visual_cues: string;
   visual_cues_vi: string;
   related_kb_ids: string[];

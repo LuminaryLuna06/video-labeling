@@ -53,7 +53,26 @@
         class="large-textarea"></textarea>
     </mat-form-field>
 
+    <!-- Description Graph EN -->
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Description Graph (English) — S-P-O for Knowledge Graph</mat-label>
+      <textarea matInput [(ngModel)]="node.description_graph" 
+        placeholder="Subject [predicate] object. Subject [predicate] object..." 
+        rows="6"
+        class="large-textarea"></textarea>
+    </mat-form-field>
+
+    <!-- Description Graph VI -->
+    <mat-form-field appearance="outline" class="full-width">
+      <mat-label>Description Graph (Vietnamese) — S-P-O cho Knowledge Graph</mat-label>
+      <textarea matInput [(ngModel)]="node.description_graph_vi" 
+        placeholder="Chủ thể [vị ngữ] tân ngữ. Chủ thể [vị ngữ] tân ngữ..." 
+        rows="6"
+        class="large-textarea"></textarea>
+    </mat-form-field>
+
     <!-- Visual Cues EN -->
+
     <mat-form-field appearance="outline" class="full-width">
       <mat-label>Visual Cues (English)</mat-label>
       <textarea matInput [(ngModel)]="node.visual_cues" 

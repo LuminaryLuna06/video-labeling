@@ -29,6 +29,8 @@ export class KBNodeDialogComponent {
     type: 'object',
     description: '',
     description_vi: '',
+    description_graph: '',
+    description_graph_vi: '',
     visual_cues: '',
     visual_cues_vi: '',
     tags: [],

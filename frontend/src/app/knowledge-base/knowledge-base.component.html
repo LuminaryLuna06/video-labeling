@@ -387,7 +387,35 @@
           </div>
         </div>
 
+        <!-- Description Graph (Bilingual) - S-P-O format for Knowledge Graph -->
+        <div class="bilingual-section">
+          <label class="section-label">
+            Description Graph
+            <span class="section-badge graph-badge">
+              <mat-icon>hub</mat-icon>
+              S-P-O · Knowledge Graph
+            </span>
+          </label>
+          <div class="bilingual-row">
+            <div class="lang-field">
+              <span class="lang-badge">🇬🇧 EN</span>
+              <mat-form-field appearance="outline" class="full-width">
+                <textarea matInput [(ngModel)]="nodeForm.description_graph" rows="3"
+                          placeholder="Subject [predicate] object. Subject [predicate] object..."></textarea>
+              </mat-form-field>
+            </div>
+            <div class="lang-field">
+              <span class="lang-badge">🇻🇳 VI</span>
+              <mat-form-field appearance="outline" class="full-width">
+                <textarea matInput [(ngModel)]="nodeForm.description_graph_vi" rows="3"
+                          placeholder="Chủ thể [vị ngữ] tân ngữ. Chủ thể [vị ngữ] tân ngữ..."></textarea>
+              </mat-form-field>
+            </div>
+          </div>
+        </div>
+
         <!-- Visual Cues (Bilingual) -->
+
         <div class="bilingual-section">
           <label class="section-label">Visual Cues</label>
           <div class="bilingual-row">
