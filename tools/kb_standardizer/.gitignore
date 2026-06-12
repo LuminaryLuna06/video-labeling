@@ -1,0 +1,6 @@
+.env
+output/*.yaml
+output/*.yml
+__pycache__/
+.venv/
+.python-version

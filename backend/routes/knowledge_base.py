@@ -75,6 +75,8 @@ def serialize_kb_node(node):
         'children_ids': [str(cid) for cid in node.get('children_ids', [])],
         'description': node.get('description', ''),
         'description_vi': node.get('description_vi', ''),
+        'description_graph': node.get('description_graph', ''),
+        'description_graph_vi': node.get('description_graph_vi', ''),
         'visual_cues': node.get('visual_cues', ''),
         'visual_cues_vi': node.get('visual_cues_vi', ''),
         'region': node.get('region', ''),
@@ -204,6 +206,8 @@ def create_kb_node():
         'children_ids': [],
         'description': data.get('description', ''),
         'description_vi': data.get('description_vi', ''),
+        'description_graph': data.get('description_graph', ''),
+        'description_graph_vi': data.get('description_graph_vi', ''),
         'visual_cues': data.get('visual_cues', ''),
         'visual_cues_vi': data.get('visual_cues_vi', ''),
         'region': data.get('region', ''),
@@ -260,6 +264,12 @@ def update_kb_node(node_id):
 
     if 'description_vi' in data:
         update_data['description_vi'] = data['description_vi']
+        
+    if 'description_graph' in data:
+        update_data['description_graph'] = data['description_graph']
+
+    if 'description_graph_vi' in data:
+        update_data['description_graph_vi'] = data['description_graph_vi']
     
     if 'visual_cues' in data:
         update_data['visual_cues'] = data['visual_cues']
@@ -406,6 +416,8 @@ def quick_create_kb_node():
         'children_ids': [],
         'description': data.get('description', ''),
         'description_vi': data.get('description_vi', ''),
+        'description_graph': data.get('description_graph', ''),
+        'description_graph_vi': data.get('description_graph_vi', ''),
         'visual_cues': data.get('visual_cues', ''),
         'visual_cues_vi': data.get('visual_cues_vi', ''),
         'region': data.get('region', ''),
