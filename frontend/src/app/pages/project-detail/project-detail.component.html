@@ -86,16 +86,16 @@
 
     <!-- Subpart Filters -->
     <div class="filter-bar" *ngIf="project.subparts?.length">
-      <button class="filter-chip" [class.active]="subpartFilter === 'all'" (click)="setSubpartFilter('all')">
+      <button class="filter-chip" [class.active]="subpartFilter === 'all'" (click)="setSubpartFilter('all')" matTooltip="Tất cả các gói công việc">
         All <span class="filter-count">{{ project.subparts?.length }}</span>
       </button>
-      <button class="filter-chip" [class.active]="subpartFilter === 'active'" (click)="setSubpartFilter('active')">
+      <button class="filter-chip" [class.active]="subpartFilter === 'active'" (click)="setSubpartFilter('active')" matTooltip="Các gói công việc đang được xử lý">
         <span class="dot active"></span> Active <span class="filter-count">{{ getSubpartCountByStatus('active') }}</span>
       </button>
-      <button class="filter-chip" [class.active]="subpartFilter === 'pending'" (click)="setSubpartFilter('pending')">
+      <button class="filter-chip" [class.active]="subpartFilter === 'pending'" (click)="setSubpartFilter('pending')" matTooltip="Các gói công việc đang tạm ngưng / chờ dữ liệu">
         <span class="dot pending"></span> Pending <span class="filter-count">{{ getSubpartCountByStatus('pending') }}</span>
       </button>
-      <button class="filter-chip" [class.active]="subpartFilter === 'completed'" (click)="setSubpartFilter('completed')">
+      <button class="filter-chip" [class.active]="subpartFilter === 'completed'" (click)="setSubpartFilter('completed')" matTooltip="Các gói công việc đã hoàn thành toàn bộ">
         <span class="dot completed"></span> Completed <span class="filter-count">{{ getSubpartCountByStatus('completed') }}</span>
       </button>
     </div>
