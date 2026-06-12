@@ -269,22 +269,22 @@
 
     <!-- Video Filters -->
     <div class="filter-bar" *ngIf="subpartVideos.length > 0">
-      <button class="filter-chip" [class.active]="videoFilter === 'all'" (click)="setVideoFilter('all')">
+      <button class="filter-chip" [class.active]="videoFilter === 'all'" (click)="setVideoFilter('all')" matTooltip="Tất cả video">
         All <span class="filter-count">{{ subpartVideos.length }}</span>
       </button>
-      <button class="filter-chip" [class.active]="videoFilter === 'not_submitted'" (click)="setVideoFilter('not_submitted')">
+      <button class="filter-chip" [class.active]="videoFilter === 'not_submitted'" (click)="setVideoFilter('not_submitted')" matTooltip="Video chưa nộp (đang được gán nhãn)">
         <mat-icon class="filter-icon">radio_button_unchecked</mat-icon> Not Submitted
         <span class="filter-count">{{ getVideoCountByStatus('not_submitted') }}</span>
       </button>
-      <button class="filter-chip" [class.active]="videoFilter === 'pending_review'" (click)="setVideoFilter('pending_review')">
+      <button class="filter-chip" [class.active]="videoFilter === 'pending_review'" (click)="setVideoFilter('pending_review')" matTooltip="Video đã nộp, đang chờ kiểm duyệt">
         <mat-icon class="filter-icon">hourglass_empty</mat-icon> Pending
         <span class="filter-count">{{ getVideoCountByStatus('pending_review') }}</span>
       </button>
-      <button class="filter-chip" [class.active]="videoFilter === 'approved'" (click)="setVideoFilter('approved')">
+      <button class="filter-chip" [class.active]="videoFilter === 'approved'" (click)="setVideoFilter('approved')" matTooltip="Video đã được phê duyệt">
         <mat-icon class="filter-icon">check_circle</mat-icon> Approved
         <span class="filter-count">{{ getVideoCountByStatus('approved') }}</span>
       </button>
-      <button class="filter-chip" [class.active]="videoFilter === 'rejected'" (click)="setVideoFilter('rejected')">
+      <button class="filter-chip" [class.active]="videoFilter === 'rejected'" (click)="setVideoFilter('rejected')" matTooltip="Video bị từ chối, cần sửa lại">
         <mat-icon class="filter-icon">cancel</mat-icon> Rejected
         <span class="filter-count">{{ getVideoCountByStatus('rejected') }}</span>
       </button>
@@ -529,22 +529,22 @@
 
     <!-- Image Filters -->
     <div class="filter-bar" *ngIf="subpartImages.length > 0">
-      <button class="filter-chip" [class.active]="imageFilter === 'all'" (click)="setImageFilter('all')">
+      <button class="filter-chip" [class.active]="imageFilter === 'all'" (click)="setImageFilter('all')" matTooltip="Tất cả hình ảnh">
         All <span class="filter-count">{{ subpartImages.length }}</span>
       </button>
-      <button class="filter-chip" [class.active]="imageFilter === 'not_submitted'" (click)="setImageFilter('not_submitted')">
+      <button class="filter-chip" [class.active]="imageFilter === 'not_submitted'" (click)="setImageFilter('not_submitted')" matTooltip="Hình ảnh chưa nộp (đang được gán nhãn)">
         <mat-icon class="filter-icon">radio_button_unchecked</mat-icon> Not Submitted
         <span class="filter-count">{{ getImageCountByStatus('not_submitted') }}</span>
       </button>
-      <button class="filter-chip" [class.active]="imageFilter === 'pending_review'" (click)="setImageFilter('pending_review')">
+      <button class="filter-chip" [class.active]="imageFilter === 'pending_review'" (click)="setImageFilter('pending_review')" matTooltip="Hình ảnh đã nộp, đang chờ kiểm duyệt">
         <mat-icon class="filter-icon">hourglass_empty</mat-icon> Pending
         <span class="filter-count">{{ getImageCountByStatus('pending_review') }}</span>
       </button>
-      <button class="filter-chip" [class.active]="imageFilter === 'approved'" (click)="setImageFilter('approved')">
+      <button class="filter-chip" [class.active]="imageFilter === 'approved'" (click)="setImageFilter('approved')" matTooltip="Hình ảnh đã được phê duyệt">
         <mat-icon class="filter-icon">check_circle</mat-icon> Approved
         <span class="filter-count">{{ getImageCountByStatus('approved') }}</span>
       </button>
-      <button class="filter-chip" [class.active]="imageFilter === 'rejected'" (click)="setImageFilter('rejected')">
+      <button class="filter-chip" [class.active]="imageFilter === 'rejected'" (click)="setImageFilter('rejected')" matTooltip="Hình ảnh bị từ chối, cần sửa lại">
         <mat-icon class="filter-icon">cancel</mat-icon> Rejected
         <span class="filter-count">{{ getImageCountByStatus('rejected') }}</span>
       </button>
