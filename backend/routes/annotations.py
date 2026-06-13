@@ -168,19 +168,23 @@ def get_region_caption(region_id):
         'updated_at': caption.get('updated_at', caption['created_at']).isoformat()
     })
 
-def _sync_knowledge_captions(db, kb_ids):
-    if not kb_ids:
-        return "", ""
-    en_desc = []
-    vi_desc = []
+def _fetch_knowledge_for_caption(db, caption):
+    kb_ids = caption.get('knowledge_base_ids', []) if caption else []
+    en_desc, vi_desc, en_graph, vi_graph = [], [], [], []
     for kb_id in kb_ids:
         node = db.knowledge_base.find_one({'_id': kb_id})
         if node:
-            if node.get('description'):
-                en_desc.append(node['description'])
-            if node.get('description_vi'):
-                vi_desc.append(node['description_vi'])
-    return "\n\n".join(en_desc), "\n\n".join(vi_desc)
+            if str(node.get('description', '')).strip(): en_desc.append(node['description'])
+            if str(node.get('description_vi', '')).strip(): vi_desc.append(node['description_vi'])
+            if str(node.get('description_graph', '')).strip(): en_graph.append(node['description_graph'])
+            if str(node.get('description_graph_vi', '')).strip(): vi_graph.append(node['description_graph_vi'])
+            
+    return {
+        'knowledge_en': '\n\n'.join(en_desc),
+        'knowledge_vi': '\n\n'.join(vi_desc),
+        'knowledge_graph_en': '\n\n'.join(en_graph),
+        'knowledge_graph_vi': '\n\n'.join(vi_graph)
+    }
 
 
 @annotations_bp.route('', methods=['POST'])
@@ -205,28 +209,21 @@ def create_caption():
         })
 
     if existing:
-        # Update instead
-        # Prepare kb_ids
-        kb_ids = _parse_object_id_list(data.get('knowledge_base_ids', existing.get('knowledge_base_ids', [])))
-        # Auto-sync text from Knowledge Base if frontend doesn't provide explicit non-empty text
-        know_en, know_vi = _sync_knowledge_captions(current_app.db, kb_ids)
-        final_know_en = data.get('knowledge_caption') if str(data.get('knowledge_caption', '')).strip() else know_en
-        final_know_vi = data.get('knowledge_caption_vi') if str(data.get('knowledge_caption_vi', '')).strip() else know_vi
-
         current_app.db.captions.update_one(
             {'_id': existing['_id']},
             {'$set': {
                 'visual_caption': data.get('visual_caption', existing.get('visual_caption', '')),
                 'contextual_caption': data.get('contextual_caption', existing.get('contextual_caption', '')),
-                'knowledge_caption': final_know_en,
+                'knowledge_caption': data.get('knowledge_caption', existing.get('knowledge_caption', '')),
                 'combined_caption': data.get('combined_caption', existing.get('combined_caption', '')),
                 'visual_caption_vi': data.get('visual_caption_vi', existing.get('visual_caption_vi', '')),
                 'contextual_caption_vi': data.get('contextual_caption_vi', existing.get('contextual_caption_vi', '')),
-                'knowledge_caption_vi': final_know_vi,
+                'knowledge_caption_vi': data.get('knowledge_caption_vi', existing.get('knowledge_caption_vi', '')),
                 'combined_caption_vi': data.get('combined_caption_vi', existing.get('combined_caption_vi', '')),
-                'knowledge_base_ids': kb_ids,
+                'knowledge_base_ids': _parse_object_id_list(data.get('knowledge_base_ids', existing.get('knowledge_base_ids', []))),
                 'updated_at': datetime.now(timezone.utc)
             }}
+
         )
         
         # Reset video approval if was approved
@@ -251,24 +248,20 @@ def create_caption():
             'updated_at': updated.get('updated_at', updated['created_at']).isoformat()
         })
 
-    kb_ids = _parse_object_id_list(data.get('knowledge_base_ids', []))
-    know_en, know_vi = _sync_knowledge_captions(current_app.db, kb_ids)
-    final_know_en = data.get('knowledge_caption') if str(data.get('knowledge_caption', '')).strip() else know_en
-    final_know_vi = data.get('knowledge_caption_vi') if str(data.get('knowledge_caption_vi', '')).strip() else know_vi
-
     caption = {
         'segment_id': ObjectId(data['segment_id']),
         'video_id': ObjectId(data['video_id']),
         'region_id': ObjectId(data['region_id']) if data.get('region_id') else None,
         'visual_caption': data.get('visual_caption', ''),
         'contextual_caption': data.get('contextual_caption', ''),
-        'knowledge_caption': final_know_en,
+        'knowledge_caption': data.get('knowledge_caption', ''),
         'combined_caption': data.get('combined_caption', ''),
         'visual_caption_vi': data.get('visual_caption_vi', ''),
         'contextual_caption_vi': data.get('contextual_caption_vi', ''),
-        'knowledge_caption_vi': final_know_vi,
+        'knowledge_caption_vi': data.get('knowledge_caption_vi', ''),
         'combined_caption_vi': data.get('combined_caption_vi', ''),
-        'knowledge_base_ids': kb_ids,
+        'knowledge_base_ids': _parse_object_id_list(data.get('knowledge_base_ids', [])),
+
         'created_by': request.current_user['_id'],
         'created_at': datetime.now(timezone.utc),
         'updated_at': datetime.now(timezone.utc)
@@ -315,35 +308,20 @@ def update_caption(caption_id):
         update_fields['visual_caption'] = data['visual_caption']
     if 'contextual_caption' in data:
         update_fields['contextual_caption'] = data['contextual_caption']
+    if 'knowledge_caption' in data:
+        update_fields['knowledge_caption'] = data['knowledge_caption']
     if 'combined_caption' in data:
         update_fields['combined_caption'] = data['combined_caption']
     if 'visual_caption_vi' in data:
         update_fields['visual_caption_vi'] = data['visual_caption_vi']
     if 'contextual_caption_vi' in data:
         update_fields['contextual_caption_vi'] = data['contextual_caption_vi']
-        
-    # Determine final knowledge_base_ids
-    if 'knowledge_base_ids' in data:
-        kb_ids = _parse_object_id_list(data.get('knowledge_base_ids', []))
-        update_fields['knowledge_base_ids'] = kb_ids
-    else:
-        kb_ids = caption.get('knowledge_base_ids', [])
-
-    know_en, know_vi = _sync_knowledge_captions(current_app.db, kb_ids)
-
-    if 'knowledge_caption' in data and str(data['knowledge_caption']).strip():
-        update_fields['knowledge_caption'] = data['knowledge_caption']
-    else:
-        update_fields['knowledge_caption'] = know_en
-
-    if 'knowledge_caption_vi' in data and str(data['knowledge_caption_vi']).strip():
+    if 'knowledge_caption_vi' in data:
         update_fields['knowledge_caption_vi'] = data['knowledge_caption_vi']
-    else:
-        update_fields['knowledge_caption_vi'] = know_vi
-
     if 'combined_caption_vi' in data:
         update_fields['combined_caption_vi'] = data['combined_caption_vi']
-        
+    if 'knowledge_base_ids' in data:
+        update_fields['knowledge_base_ids'] = _parse_object_id_list(data.get('knowledge_base_ids', []))
     update_fields['updated_at'] = datetime.now(timezone.utc)
 
     current_app.db.captions.update_one(
@@ -758,6 +736,8 @@ def _build_video_export(video):
             caption = current_app.db.captions.find_one({'region_id': r['_id']})
             kb_ids, kb_items = _get_kb_items_for_caption(caption)
 
+            kdata = _fetch_knowledge_for_caption(current_app.db, caption) if caption else {'knowledge_en': '', 'knowledge_vi': '', 'knowledge_graph_en': '', 'knowledge_graph_vi': ''}
+
             region_data = {
                 'id': str(r['_id']),
                 'label': r.get('label', ''),
@@ -768,12 +748,14 @@ def _build_video_export(video):
                 'captions': {
                     'en': {
                         'visual': caption.get('visual_caption', '') if caption else '',
-                        'knowledge': caption.get('knowledge_caption', '') if caption else '',
+                        'knowledge': kdata['knowledge_en'],
+                        'knowledge_graph': kdata['knowledge_graph_en'],
                         'combined': caption.get('combined_caption', '') if caption else ''
                     },
                     'vi': {
                         'visual': caption.get('visual_caption_vi', '') if caption else '',
-                        'knowledge': caption.get('knowledge_caption_vi', '') if caption else '',
+                        'knowledge': kdata['knowledge_vi'],
+                        'knowledge_graph': kdata['knowledge_graph_vi'],
                         'combined': caption.get('combined_caption_vi', '') if caption else ''
                     },
                     'knowledge_base_ids': kb_ids,
@@ -790,15 +772,18 @@ def _build_video_export(video):
         seg_captions_data = []
         for c in seg_captions:
             kb_ids, kb_items = _get_kb_items_for_caption(c)
+            kdata = _fetch_knowledge_for_caption(current_app.db, c)
             seg_captions_data.append({
                 'en': {
                     'contextual': c.get('contextual_caption', ''),
-                    'knowledge': c.get('knowledge_caption', ''),
+                    'knowledge': kdata['knowledge_en'],
+                    'knowledge_graph': kdata['knowledge_graph_en'],
                     'combined': c.get('combined_caption', '')
                 },
                 'vi': {
                     'contextual': c.get('contextual_caption_vi', ''),
-                    'knowledge': c.get('knowledge_caption_vi', ''),
+                    'knowledge': kdata['knowledge_vi'],
+                    'knowledge_graph': kdata['knowledge_graph_vi'],
                     'combined': c.get('combined_caption_vi', '')
                 },
                 'knowledge_base_ids': kb_ids,
@@ -949,13 +934,16 @@ def export_segmented_video(video_id):
                     caption = current_app.db.captions.find_one({'region_id': region['_id']})
                     gt_captions = {}
                     if caption:
+                        kdata = _fetch_knowledge_for_caption(current_app.db, caption)
                         gt_captions = {
                             'visual_en': caption.get('visual_caption', ''),
                             'visual_vi': caption.get('visual_caption_vi', ''),
                             'combined_en': caption.get('combined_caption', ''),
                             'combined_vi': caption.get('combined_caption_vi', ''),
-                            'knowledge_en': caption.get('knowledge_caption', ''),
-                            'knowledge_vi': caption.get('knowledge_caption_vi', ''),
+                            'knowledge_en': kdata['knowledge_en'],
+                            'knowledge_vi': kdata['knowledge_vi'],
+                            'knowledge_graph_en': kdata['knowledge_graph_en'],
+                            'knowledge_graph_vi': kdata['knowledge_graph_vi'],
                         }
 
                     regions_info.append({
@@ -977,13 +965,16 @@ def export_segmented_video(video_id):
             })
             seg_gt_captions = {}
             if seg_caption:
+                kdata = _fetch_knowledge_for_caption(current_app.db, seg_caption)
                 seg_gt_captions = {
                     'contextual_en': seg_caption.get('contextual_caption', ''),
                     'contextual_vi': seg_caption.get('contextual_caption_vi', ''),
                     'combined_en': seg_caption.get('combined_caption', ''),
                     'combined_vi': seg_caption.get('combined_caption_vi', ''),
-                    'knowledge_en': seg_caption.get('knowledge_caption', ''),
-                    'knowledge_vi': seg_caption.get('knowledge_caption_vi', ''),
+                    'knowledge_en': kdata['knowledge_en'],
+                    'knowledge_vi': kdata['knowledge_vi'],
+                    'knowledge_graph_en': kdata['knowledge_graph_en'],
+                    'knowledge_graph_vi': kdata['knowledge_graph_vi'],
                 }
 
             segments_info.append({
@@ -1200,13 +1191,16 @@ def process_batch_segmented_export(app, task_id, project_id, subpart_id=None):
                                 caption = db.captions.find_one({'region_id': region['_id']})
                                 gt_captions = {}
                                 if caption:
+                                    kdata = _fetch_knowledge_for_caption(db, caption)
                                     gt_captions = {
                                         'visual_en': caption.get('visual_caption', ''),
                                         'visual_vi': caption.get('visual_caption_vi', ''),
                                         'combined_en': caption.get('combined_caption', ''),
                                         'combined_vi': caption.get('combined_caption_vi', ''),
-                                        'knowledge_en': caption.get('knowledge_caption', ''),
-                                        'knowledge_vi': caption.get('knowledge_caption_vi', ''),
+                                        'knowledge_en': kdata['knowledge_en'],
+                                        'knowledge_vi': kdata['knowledge_vi'],
+                                        'knowledge_graph_en': kdata['knowledge_graph_en'],
+                                        'knowledge_graph_vi': kdata['knowledge_graph_vi'],
                                     }
 
                                 regions_info.append({
@@ -1219,13 +1213,16 @@ def process_batch_segmented_export(app, task_id, project_id, subpart_id=None):
                         seg_caption = db.captions.find_one({'segment_id': seg['_id'], 'region_id': None})
                         seg_gt_captions = {}
                         if seg_caption:
+                            kdata = _fetch_knowledge_for_caption(db, seg_caption)
                             seg_gt_captions = {
                                 'contextual_en': seg_caption.get('contextual_caption', ''),
                                 'contextual_vi': seg_caption.get('contextual_caption_vi', ''),
                                 'combined_en': seg_caption.get('combined_caption', ''),
                                 'combined_vi': seg_caption.get('combined_caption_vi', ''),
-                                'knowledge_en': seg_caption.get('knowledge_caption', ''),
-                                'knowledge_vi': seg_caption.get('knowledge_caption_vi', ''),
+                                'knowledge_en': kdata['knowledge_en'],
+                                'knowledge_vi': kdata['knowledge_vi'],
+                                'knowledge_graph_en': kdata['knowledge_graph_en'],
+                                'knowledge_graph_vi': kdata['knowledge_graph_vi'],
                             }
 
                         segments_info.append({
@@ -1351,7 +1348,16 @@ def get_eligible_videos_for_export(project_id):
                     all_captions_ok = False
                     missing_info.append({'segment_id': str(seg['_id']), 'missing': 'no caption record'})
                     break
-                missing_fields = [f for f in REQUIRED_CAPTION_FIELDS if not (cap.get(f) or '').strip()]
+                kdata = _fetch_knowledge_for_caption(db, cap)
+                cap_check = {
+                    'contextual_caption': cap.get('contextual_caption'),
+                    'contextual_caption_vi': cap.get('contextual_caption_vi'),
+                    'combined_caption': cap.get('combined_caption'),
+                    'combined_caption_vi': cap.get('combined_caption_vi'),
+                    'knowledge_caption': kdata['knowledge_en'],
+                    'knowledge_caption_vi': kdata['knowledge_vi'],
+                }
+                missing_fields = [f for f in REQUIRED_CAPTION_FIELDS if not (cap_check.get(f) or '').strip()]
                 if missing_fields:
                     all_captions_ok = False
                     missing_info.append({'segment_id': str(seg['_id']), 'missing': missing_fields})
@@ -1647,13 +1653,16 @@ def process_batch_labeled_videos_export(app, task_id, project_id, subpart_id=Non
                         })
                         gt = {}
                         if seg_caption:
+                            kdata = _fetch_knowledge_for_caption(db, seg_caption)
                             gt = {
                                 'contextual_en': seg_caption.get('contextual_caption', ''),
                                 'contextual_vi': seg_caption.get('contextual_caption_vi', ''),
                                 'combined_en': seg_caption.get('combined_caption', ''),
                                 'combined_vi': seg_caption.get('combined_caption_vi', ''),
-                                'knowledge_en': seg_caption.get('knowledge_caption', ''),
-                                'knowledge_vi': seg_caption.get('knowledge_caption_vi', ''),
+                                'knowledge_en': kdata['knowledge_en'],
+                                'knowledge_vi': kdata['knowledge_vi'],
+                                'knowledge_graph_en': kdata['knowledge_graph_en'],
+                                'knowledge_graph_vi': kdata['knowledge_graph_vi'],
                             }
                         segments_info.append({
                             'id': str(seg['_id']),
