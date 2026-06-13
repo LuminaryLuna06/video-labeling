@@ -168,6 +168,20 @@ def get_region_caption(region_id):
         'updated_at': caption.get('updated_at', caption['created_at']).isoformat()
     })
 
+def _sync_knowledge_captions(db, kb_ids):
+    if not kb_ids:
+        return "", ""
+    en_desc = []
+    vi_desc = []
+    for kb_id in kb_ids:
+        node = db.knowledge_base.find_one({'_id': kb_id})
+        if node:
+            if node.get('description'):
+                en_desc.append(node['description'])
+            if node.get('description_vi'):
+                vi_desc.append(node['description_vi'])
+    return "\n\n".join(en_desc), "\n\n".join(vi_desc)
+
 
 @annotations_bp.route('', methods=['POST'])
 @token_required
@@ -192,18 +206,25 @@ def create_caption():
 
     if existing:
         # Update instead
+        # Prepare kb_ids
+        kb_ids = _parse_object_id_list(data.get('knowledge_base_ids', existing.get('knowledge_base_ids', [])))
+        # Auto-sync text from Knowledge Base if frontend doesn't provide explicit non-empty text
+        know_en, know_vi = _sync_knowledge_captions(current_app.db, kb_ids)
+        final_know_en = data.get('knowledge_caption') if str(data.get('knowledge_caption', '')).strip() else know_en
+        final_know_vi = data.get('knowledge_caption_vi') if str(data.get('knowledge_caption_vi', '')).strip() else know_vi
+
         current_app.db.captions.update_one(
             {'_id': existing['_id']},
             {'$set': {
                 'visual_caption': data.get('visual_caption', existing.get('visual_caption', '')),
                 'contextual_caption': data.get('contextual_caption', existing.get('contextual_caption', '')),
-                'knowledge_caption': data.get('knowledge_caption', existing.get('knowledge_caption', '')),
+                'knowledge_caption': final_know_en,
                 'combined_caption': data.get('combined_caption', existing.get('combined_caption', '')),
                 'visual_caption_vi': data.get('visual_caption_vi', existing.get('visual_caption_vi', '')),
                 'contextual_caption_vi': data.get('contextual_caption_vi', existing.get('contextual_caption_vi', '')),
-                'knowledge_caption_vi': data.get('knowledge_caption_vi', existing.get('knowledge_caption_vi', '')),
+                'knowledge_caption_vi': final_know_vi,
                 'combined_caption_vi': data.get('combined_caption_vi', existing.get('combined_caption_vi', '')),
-                'knowledge_base_ids': _parse_object_id_list(data.get('knowledge_base_ids', existing.get('knowledge_base_ids', []))),
+                'knowledge_base_ids': kb_ids,
                 'updated_at': datetime.now(timezone.utc)
             }}
         )
@@ -230,19 +251,24 @@ def create_caption():
             'updated_at': updated.get('updated_at', updated['created_at']).isoformat()
         })
 
+    kb_ids = _parse_object_id_list(data.get('knowledge_base_ids', []))
+    know_en, know_vi = _sync_knowledge_captions(current_app.db, kb_ids)
+    final_know_en = data.get('knowledge_caption') if str(data.get('knowledge_caption', '')).strip() else know_en
+    final_know_vi = data.get('knowledge_caption_vi') if str(data.get('knowledge_caption_vi', '')).strip() else know_vi
+
     caption = {
         'segment_id': ObjectId(data['segment_id']),
         'video_id': ObjectId(data['video_id']),
         'region_id': ObjectId(data['region_id']) if data.get('region_id') else None,
         'visual_caption': data.get('visual_caption', ''),
         'contextual_caption': data.get('contextual_caption', ''),
-        'knowledge_caption': data.get('knowledge_caption', ''),
+        'knowledge_caption': final_know_en,
         'combined_caption': data.get('combined_caption', ''),
         'visual_caption_vi': data.get('visual_caption_vi', ''),
         'contextual_caption_vi': data.get('contextual_caption_vi', ''),
-        'knowledge_caption_vi': data.get('knowledge_caption_vi', ''),
+        'knowledge_caption_vi': final_know_vi,
         'combined_caption_vi': data.get('combined_caption_vi', ''),
-        'knowledge_base_ids': _parse_object_id_list(data.get('knowledge_base_ids', [])),
+        'knowledge_base_ids': kb_ids,
         'created_by': request.current_user['_id'],
         'created_at': datetime.now(timezone.utc),
         'updated_at': datetime.now(timezone.utc)
@@ -289,20 +315,35 @@ def update_caption(caption_id):
         update_fields['visual_caption'] = data['visual_caption']
     if 'contextual_caption' in data:
         update_fields['contextual_caption'] = data['contextual_caption']
-    if 'knowledge_caption' in data:
-        update_fields['knowledge_caption'] = data['knowledge_caption']
     if 'combined_caption' in data:
         update_fields['combined_caption'] = data['combined_caption']
     if 'visual_caption_vi' in data:
         update_fields['visual_caption_vi'] = data['visual_caption_vi']
     if 'contextual_caption_vi' in data:
         update_fields['contextual_caption_vi'] = data['contextual_caption_vi']
-    if 'knowledge_caption_vi' in data:
+        
+    # Determine final knowledge_base_ids
+    if 'knowledge_base_ids' in data:
+        kb_ids = _parse_object_id_list(data.get('knowledge_base_ids', []))
+        update_fields['knowledge_base_ids'] = kb_ids
+    else:
+        kb_ids = caption.get('knowledge_base_ids', [])
+
+    know_en, know_vi = _sync_knowledge_captions(current_app.db, kb_ids)
+
+    if 'knowledge_caption' in data and str(data['knowledge_caption']).strip():
+        update_fields['knowledge_caption'] = data['knowledge_caption']
+    else:
+        update_fields['knowledge_caption'] = know_en
+
+    if 'knowledge_caption_vi' in data and str(data['knowledge_caption_vi']).strip():
         update_fields['knowledge_caption_vi'] = data['knowledge_caption_vi']
+    else:
+        update_fields['knowledge_caption_vi'] = know_vi
+
     if 'combined_caption_vi' in data:
         update_fields['combined_caption_vi'] = data['combined_caption_vi']
-    if 'knowledge_base_ids' in data:
-        update_fields['knowledge_base_ids'] = _parse_object_id_list(data.get('knowledge_base_ids', []))
+        
     update_fields['updated_at'] = datetime.now(timezone.utc)
 
     current_app.db.captions.update_one(
