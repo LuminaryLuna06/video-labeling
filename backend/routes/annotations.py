@@ -1254,6 +1254,96 @@ def process_batch_segmented_export(app, task_id, project_id, subpart_id=None):
             db.export_tasks.update_one({'_id': task_id}, {'$set': {'status': 'failed', 'error': str(e)}})
 
 
+@annotations_bp.route('/export/project/<project_id>/eligible-videos', methods=['GET'])
+@token_required
+def get_eligible_videos_for_export(project_id):
+    """
+    Endpoint nhẹ: trả về danh sách video đủ điều kiện export (không cần build ZIP).
+    Điều kiện: review_status in [pending_review, approved] + đủ 6 trường caption cho mọi segment.
+    Query param: ?subpart_id=<id> để lọc theo subpart.
+    """
+    try:
+        db = current_app.db
+        project = db.projects.find_one({'_id': ObjectId(project_id)})
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+
+        subpart_id = request.args.get('subpart_id')
+        query = {'project_id': ObjectId(project_id)}
+        if subpart_id:
+            query['subpart_id'] = ObjectId(subpart_id)
+
+        videos = list(db.videos.find(query, {
+            '_id': 1, 'original_name': 1, 'review_status': 1,
+            'subpart_id': 1, 'duration': 1
+        }))
+
+        REQUIRED_CAPTION_FIELDS = [
+            'contextual_caption', 'contextual_caption_vi',
+            'knowledge_caption', 'knowledge_caption_vi',
+            'combined_caption', 'combined_caption_vi',
+        ]
+
+        eligible = []
+        ineligible_review = 0
+        ineligible_no_segments = 0
+        ineligible_incomplete = 0
+
+        for video in videos:
+            # 1. Lọc theo review_status
+            if video.get('review_status') not in ['pending_review', 'approved']:
+                ineligible_review += 1
+                continue
+
+            # 2. Phải có segment
+            segments = list(db.video_segments.find({'video_id': video['_id']}, {'_id': 1}))
+            if not segments:
+                ineligible_no_segments += 1
+                continue
+
+            # 3. Kiểm tra đủ 6 trường caption cho mọi segment
+            all_captions_ok = True
+            missing_info = []
+            for seg in segments:
+                cap = db.captions.find_one({'segment_id': seg['_id'], 'region_id': None})
+                if not cap:
+                    all_captions_ok = False
+                    missing_info.append({'segment_id': str(seg['_id']), 'missing': 'no caption record'})
+                    break
+                missing_fields = [f for f in REQUIRED_CAPTION_FIELDS if not (cap.get(f) or '').strip()]
+                if missing_fields:
+                    all_captions_ok = False
+                    missing_info.append({'segment_id': str(seg['_id']), 'missing': missing_fields})
+                    break
+
+            if not all_captions_ok:
+                ineligible_incomplete += 1
+                continue
+
+            eligible.append({
+                'id': str(video['_id']),
+                'name': video.get('original_name', ''),
+                'review_status': video.get('review_status', ''),
+                'segment_count': len(segments),
+                'duration': video.get('duration', 0),
+            })
+
+        return jsonify({
+            'project_id': project_id,
+            'subpart_id': subpart_id,
+            'eligible_count': len(eligible),
+            'ineligible_review_status': ineligible_review,
+            'ineligible_no_segments': ineligible_no_segments,
+            'ineligible_incomplete_captions': ineligible_incomplete,
+            'total_checked': len(videos),
+            'eligible_videos': eligible
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[EligibleVideos] Error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
 @annotations_bp.route('/export/project/<project_id>/segmented/start', methods=['POST'])
 @token_required
 def start_batch_segmented_export(project_id):
