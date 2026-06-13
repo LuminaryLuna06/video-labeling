@@ -1023,6 +1023,7 @@ def process_batch_segmented_export(app, task_id, project_id, subpart_id=None):
 
             export_dir = os.path.join(current_app.root_path, 'uploads', 'exports')
             os.makedirs(export_dir, exist_ok=True)
+            _cleanup_exports(export_dir, db=db)
             
             project = db.projects.find_one({'_id': ObjectId(project_id)})
             if not project:
@@ -1332,20 +1333,56 @@ def download_batch_segmented_export(task_id):
 # Exports full original videos (no ffmpeg split) for videos that have >=1 segment,
 # grouped by subpart, with a single metadata.json at the root.
 
-def _cleanup_old_labeled_exports(export_dir):
-    """Delete export zip files older than 24h to free disk space."""
-    if not os.path.exists(export_dir):
-        return
+def _cleanup_exports(export_dir, db=None, max_age_hours=24):
+    """Dọn dẹp toàn diện sau mỗi lần export:
+    1. Xóa file ZIP cũ hơn max_age_hours trong thư mục exports/
+    2. Xóa các thư mục tmp_* bị sót lại do crash trước đó
+    3. Xóa các bản ghi export_tasks cũ trong MongoDB (nếu có db)
+    """
     now = time.time()
-    for filename in os.listdir(export_dir):
-        if not filename.endswith('.zip'):
-            continue
-        filepath = os.path.join(export_dir, filename)
+    max_age_sec = max_age_hours * 3600
+
+    # 1. Xóa ZIP cũ
+    if os.path.exists(export_dir):
+        for filename in os.listdir(export_dir):
+            if not filename.endswith('.zip'):
+                continue
+            filepath = os.path.join(export_dir, filename)
+            try:
+                if os.path.isfile(filepath) and (now - os.path.getmtime(filepath)) > max_age_sec:
+                    os.remove(filepath)
+                    logger.info(f"[Cleanup] Deleted old export ZIP: {filename}")
+            except Exception as e:
+                logger.warning(f"[Cleanup] Failed to delete ZIP {filepath}: {e}")
+
+    # 2. Xóa tmp dir bị sót (tên bắt đầu bằng batch_seg_export_ hoặc batch_labeled_videos_)
+    tmp_root = tempfile.gettempdir()
+    stale_prefixes = ('batch_seg_export_', 'batch_labeled_videos_')
+    try:
+        for entry in os.listdir(tmp_root):
+            if not any(entry.startswith(p) for p in stale_prefixes):
+                continue
+            tmp_path = os.path.join(tmp_root, entry)
+            try:
+                age = now - os.path.getmtime(tmp_path)
+                if age > max_age_sec:
+                    shutil.rmtree(tmp_path, ignore_errors=True)
+                    logger.info(f"[Cleanup] Deleted stale tmp dir: {entry}")
+            except Exception as e:
+                logger.warning(f"[Cleanup] Failed to delete tmp dir {tmp_path}: {e}")
+    except Exception as e:
+        logger.warning(f"[Cleanup] Failed to scan tmp dir: {e}")
+
+    # 3. Xóa export_tasks cũ hơn max_age_hours khỏi MongoDB
+    if db is not None:
         try:
-            if os.path.isfile(filepath) and (now - os.path.getmtime(filepath)) > 24 * 3600:
-                os.remove(filepath)
+            from datetime import timezone as _tz
+            cutoff = datetime.now(_tz.utc) - timedelta(hours=max_age_hours)
+            result = db.export_tasks.delete_many({'created_at': {'$lt': cutoff}})
+            if result.deleted_count:
+                logger.info(f"[Cleanup] Deleted {result.deleted_count} old export_tasks from DB")
         except Exception as e:
-            logger.warning(f"[LabeledExport] Failed to cleanup {filepath}: {e}")
+            logger.warning(f"[Cleanup] Failed to purge old export_tasks: {e}")
 
 
 def process_batch_labeled_videos_export(app, task_id, project_id, subpart_id=None):
@@ -1360,7 +1397,7 @@ def process_batch_labeled_videos_export(app, task_id, project_id, subpart_id=Non
 
             export_dir = os.path.join(current_app.root_path, 'uploads', 'exports')
             os.makedirs(export_dir, exist_ok=True)
-            _cleanup_old_labeled_exports(export_dir)
+            _cleanup_exports(export_dir, db=db)
 
             project = db.projects.find_one({'_id': ObjectId(project_id)})
             if not project:
