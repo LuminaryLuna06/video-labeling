@@ -290,6 +290,53 @@ def create_caption():
     }), 201
 
 
+@annotations_bp.route('/bulk-combined-targets', methods=['GET'])
+@token_required
+def get_bulk_combined_targets():
+    """
+    Fetch all captions that have at least one knowledge base ID.
+    Returns visual, contextual, knowledge info to be used by external generator tools.
+    """
+    query = {
+        'knowledge_base_ids': {'$exists': True, '$ne': []}
+    }
+    
+    # We only return needed fields to keep the response light
+    projection = {
+        'segment_id': 1,
+        'video_id': 1,
+        'region_id': 1,
+        'visual_caption': 1,
+        'contextual_caption': 1,
+        'visual_caption_vi': 1,
+        'contextual_caption_vi': 1,
+        'knowledge_base_ids': 1
+    }
+    
+    captions_cursor = current_app.db.captions.find(query, projection)
+    results = []
+    
+    for caption in captions_cursor:
+        # Resolve knowledge texts
+        knowledge_info = _fetch_knowledge_for_caption(current_app.db, caption)
+        
+        results.append({
+            'id': str(caption['_id']),
+            'segment_id': str(caption.get('segment_id', '')),
+            'video_id': str(caption.get('video_id', '')),
+            'region_id': str(caption.get('region_id', '')) if caption.get('region_id') else None,
+            'visual_caption': caption.get('visual_caption', ''),
+            'contextual_caption': caption.get('contextual_caption', ''),
+            'visual_caption_vi': caption.get('visual_caption_vi', ''),
+            'contextual_caption_vi': caption.get('contextual_caption_vi', ''),
+            'knowledge_en': knowledge_info['knowledge_en'],
+            'knowledge_vi': knowledge_info['knowledge_vi'],
+            'knowledge_base_ids': _serialize_object_id_list(caption.get('knowledge_base_ids', []))
+        })
+        
+    return jsonify(results), 200
+
+
 @annotations_bp.route('/<caption_id>', methods=['PUT'])
 @token_required
 def update_caption(caption_id):
@@ -329,8 +376,9 @@ def update_caption(caption_id):
         {'$set': update_fields}
     )
     
-    # Reset video approval if was approved
-    _reset_video_approval_if_needed(caption['video_id'])
+    # Reset video approval if was approved (skip if caller requests it, e.g. bulk scripts)
+    if not data.get('skip_approval_reset', False):
+        _reset_video_approval_if_needed(caption['video_id'])
 
     updated = current_app.db.captions.find_one({'_id': ObjectId(caption_id)})
     return jsonify({
