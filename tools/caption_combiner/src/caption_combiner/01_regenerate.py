@@ -6,13 +6,15 @@ Usage:
     uv run python src/caption_combiner/01_regenerate.py
     uv run python src/caption_combiner/01_regenerate.py --limit 10
     uv run python src/caption_combiner/01_regenerate.py --use-category-prompts
+    uv run python src/caption_combiner/01_regenerate.py --workers 10
 """
 
 import argparse
 import asyncio
 import os
+import random
 import sys
-import json
+import time
 from pathlib import Path
 
 # Fix encoding on Windows
@@ -20,7 +22,7 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-import requests
+import httpx
 from dotenv import load_dotenv
 from openai import AsyncOpenAI, RateLimitError, APIStatusError
 
@@ -31,15 +33,19 @@ API_URL = os.getenv("ANNOTATOR_API_URL", "https://annotator-api.stecom.vn")
 USERNAME = os.getenv("ANNOTATOR_USERNAME", "")
 PASSWORD = os.getenv("ANNOTATOR_PASSWORD", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
-# Rate limiting settings
-MIN_REQUEST_DELAY_S = 0.5
+# Rate limiting — mirror KB standardizer
+MIN_REQUEST_DELAY_S = 0.75   # delay tối thiểu giữa các request khi acquire semaphore
 MAX_RETRIES = 5
-RETRY_BASE_DELAY = 2.0
-RETRY_MAX_DELAY = 60.0
+RETRY_BASE_DELAY = 2.0       # giây — base exponential backoff
+RETRY_MAX_DELAY = 60.0       # giây — cap tối đa
+
+# Giá gpt-5.4-mini
+PRICE_INPUT_PER_1M = 0.75    # USD / 1M input tokens
+PRICE_OUTPUT_PER_1M = 4.50   # USD / 1M output tokens
 
 # ===================== KB DETECTION =====================
 
@@ -63,27 +69,27 @@ def detect_category(node: dict, all_nodes: list[dict]) -> str:
         return "UNKNOWN"
     id_index = {n.get("id"): n for n in all_nodes if n.get("id")}
     KEYWORD_MAP = [
-        ("A. Di tích lịch sử - Văn hoá", ["di tích", "lịch sử", "historic", "heritage", "monument", "communal house", "đình", "đền", "chùa", "miếu", "thành", "lăng", "bia", "pagoda", "temple", "shrine"]),
-        ("B. Hồ - Công viên - Cảnh quan", ["hồ", "công viên", "cảnh quan", "lake", "park", "garden", "vườn hoa"]),
-        ("C. Bảo tàng", ["bảo tàng", "museum"]),
-        ("D. Nghệ thuật biểu diễn", ["nghệ thuật", "biểu diễn", "performing arts", "ca trù", "chèo", "tuồng", "múa rối", "water puppet", "rối nước", "xẩm"]),
-        ("E. Lễ hội - Sự kiện", ["lễ hội", "festival", "sự kiện", "hội làng"]),
-        ("F. Làng nghề truyền thống", ["làng nghề", "craft village", "silk village", "làng lụa", "làng gốm", "làng đúc", "nghề truyền thống", "thủ công"]),
-        ("G. Ẩm thực Hà Nội", ["ẩm thực", "food", "cuisine", "phở", "bún", "bánh", "chả", "nem", "bia hơi", "cốm", "kem tràng tiền", "quán ăn"]),
-        ("H. Hoạt động du lịch & Giải trí", ["hoạt động du lịch", "giải trí", "activity", "tour", "trải nghiệm", "experience"]),
-        ("I. Thiên nhiên & Ngoại thành", ["thiên nhiên", "ngoại thành", "nature", "mountain", "núi", "rừng", "thác nước", "national park", "vườn quốc gia"]),
-        ("J. Người dân & Văn hoá sống", ["người dân", "văn hoá sống", "people", "lifestyle", "community", "phụ nữ", "women"]),
-        ("K. Bốn mùa Hà Nội", ["bốn mùa", "mùa xuân", "mùa hè", "mùa thu", "mùa đông", "spring", "summer", "autumn", "fall", "winter", "season"]),
-        ("L. Video đặc biệt", ["video", "tư liệu", "documentary", "special", "đặc biệt"]),
+        ("A", ["di tích", "lịch sử", "historic", "heritage", "monument", "communal house", "đình", "đền", "chùa", "miếu", "thành", "lăng", "bia", "pagoda", "temple", "shrine"]),
+        ("B", ["hồ", "công viên", "cảnh quan", "lake", "park", "garden", "vườn hoa"]),
+        ("C", ["bảo tàng", "museum"]),
+        ("D", ["nghệ thuật", "biểu diễn", "performing arts", "ca trù", "chèo", "tuồng", "múa rối", "water puppet", "rối nước", "xẩm"]),
+        ("E", ["lễ hội", "festival", "sự kiện", "hội làng"]),
+        ("F", ["làng nghề", "craft village", "silk village", "làng lụa", "làng gốm", "làng đúc", "nghề truyền thống", "thủ công"]),
+        ("G", ["ẩm thực", "food", "cuisine", "phở", "bún", "bánh", "chả", "nem", "bia hơi", "cốm", "kem tràng tiền", "quán ăn"]),
+        ("H", ["hoạt động du lịch", "giải trí", "activity", "tour", "trải nghiệm", "experience"]),
+        ("I", ["thiên nhiên", "ngoại thành", "nature", "mountain", "núi", "rừng", "thác nước", "national park", "vườn quốc gia"]),
+        ("J", ["người dân", "văn hoá sống", "people", "lifestyle", "community", "phụ nữ", "women"]),
+        ("K", ["bốn mùa", "mùa xuân", "mùa hè", "mùa thu", "mùa đông", "spring", "summer", "autumn", "fall", "winter", "season"]),
+        ("L", ["video", "tư liệu", "documentary", "special", "đặc biệt"]),
     ]
 
-    def match_category(text: str) -> str | None:
+    def match_letter(text: str) -> str | None:
         if not text: return None
         text_lower = text.lower()
-        for category, keywords in KEYWORD_MAP:
+        for letter, keywords in KEYWORD_MAP:
             for kw in keywords:
                 if kw in text_lower:
-                    return category
+                    return letter
         return None
 
     visited = set()
@@ -97,16 +103,11 @@ def detect_category(node: dict, all_nodes: list[dict]) -> str:
         current_id = ancestor.get("parent_id")
 
     for ancestor in reversed(ancestor_chain):
-        a_name = ancestor.get("name", "")
-        a_vi = ancestor.get("name_vi", "")
-        cat = match_category(a_name) or match_category(a_vi)
-        if cat: return cat
+        l = match_letter(ancestor.get("name", "")) or match_letter(ancestor.get("name_vi", ""))
+        if l: return l
 
-    cat = match_category(node.get("name", "")) or match_category(node.get("name_vi", ""))
-    if cat: return cat
-    for tag in node.get("tags", []):
-        cat = match_category(tag)
-        if cat: return cat
+    l = match_letter(node.get("name", "")) or match_letter(node.get("name_vi", ""))
+    if l: return l
 
     return "UNKNOWN"
 
@@ -138,66 +139,81 @@ def load_prompt(category_hint: str, use_category: bool) -> str:
     _prompt_cache[letter] = full_prompt
     return full_prompt
 
-# ===================== API =====================
+# ===================== ASYNC HTTP (fetch phase) =====================
 
-def login() -> str:
-    url = f"{API_URL}/api/auth/login"
-    resp = requests.post(url, json={"username": USERNAME, "password": PASSWORD}, timeout=30)
-    resp.raise_for_status()
-    token = resp.json().get("token") or resp.json().get("access_token")
-    print(f"✅ Đăng nhập thành công: {USERNAME}")
-    return token
+async def async_get(client: httpx.AsyncClient, url: str, sem: asyncio.Semaphore):
+    """GET with semaphore to avoid hammering our own API."""
+    async with sem:
+        r = await client.get(url)
+    return r
 
-def fetch_kb_nodes(token: str) -> list[dict]:
-    url = f"{API_URL}/api/knowledge-base?tree=false"
-    resp = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=60)
-    resp.raise_for_status()
-    nodes = resp.json()
-    print(f"📦 Tổng số KB nodes: {len(nodes)}")
-    return nodes
+async def fetch_segment_captions(client: httpx.AsyncClient, seg_id: str, fetch_sem: asyncio.Semaphore):
+    r = await async_get(client, f"{API_URL}/api/annotations/segment/{seg_id}", fetch_sem)
+    if r.status_code == 200:
+        return [c for c in r.json() if c.get("knowledge_base_ids")]
+    return []
 
-def fetch_bulk_targets(token: str) -> list[dict]:
-    """Crawl projects -> videos -> segments -> segment captions to find captions with KB"""
+async def fetch_video_captions(client: httpx.AsyncClient, vid: dict, fetch_sem: asyncio.Semaphore):
+    vid_id = vid["id"]
+    vid_name = vid.get("name", vid_id)
+
+    r = await async_get(client, f"{API_URL}/api/videos/{vid_id}", fetch_sem)
+    if r.status_code != 200:
+        print(f"   ⚠️  Bỏ qua video {vid_name} (lỗi {r.status_code})")
+        return []
+
+    segments = r.json().get("segments", [])
+    tasks = [fetch_segment_captions(client, seg["id"], fetch_sem) for seg in segments]
+    results = await asyncio.gather(*tasks)
+    found = sum(len(r) for r in results)
+    captions = [cap for batch in results for cap in batch]
+    print(f"   🎥 {vid_name}: {len(segments)} segs → {found} captions có KB")
+    return captions
+
+async def fetch_bulk_targets_async(token: str) -> list[dict]:
     headers = {"Authorization": f"Bearer {token}"}
-    
-    resp = requests.get(f"{API_URL}/api/projects", headers=headers, timeout=30)
-    resp.raise_for_status()
-    projects = resp.json()
-    
-    captions_with_kb = []
-    
-    print(f"🔍 Quét dữ liệu từ {len(projects)} projects...")
-    for proj in projects:
-        proj_id = proj["id"]
-        v_resp = requests.get(f"{API_URL}/api/videos/project/{proj_id}", headers=headers, timeout=30)
-        if not v_resp.ok: continue
-        videos = v_resp.json()
-        
-        for vid in videos:
-            vid_id = vid["id"]
-            vd_resp = requests.get(f"{API_URL}/api/videos/{vid_id}", headers=headers, timeout=30)
-            if not vd_resp.ok: continue
-            video_data = vd_resp.json()
-            
-            for seg in video_data.get("segments", []):
-                seg_id = seg["id"]
-                # Get all captions for this segment (both segment-level and region-level)
-                sc_resp = requests.get(f"{API_URL}/api/annotations/segment/{seg_id}", headers=headers, timeout=30)
-                if sc_resp.ok:
-                    for cap in sc_resp.json():
-                        if cap.get("knowledge_base_ids"):
-                            captions_with_kb.append(cap)
+    fetch_sem = asyncio.Semaphore(10)  # max 10 concurrent API calls when crawling
 
-    unique_captions = {c["id"]: c for c in captions_with_kb}
-    data = list(unique_captions.values())
-    print(f"📦 Tổng số captions có KB tìm thấy: {len(data)}")
+    async with httpx.AsyncClient(headers=headers, timeout=60) as client:
+        print("📋 Đang lấy danh sách projects...")
+        r = await client.get(f"{API_URL}/api/projects")
+        r.raise_for_status()
+        projects = r.json()
+        print(f"   → {len(projects)} projects")
+
+        all_captions = []
+        for p_idx, proj in enumerate(projects):
+            proj_id = proj["id"]
+            proj_name = proj.get("name", proj_id)
+            print(f"\n🗂  [{p_idx+1}/{len(projects)}] Project: {proj_name}")
+
+            rv = await client.get(f"{API_URL}/api/videos/project/{proj_id}")
+            if rv.status_code != 200:
+                print(f"   ⚠️  Không lấy được danh sách video")
+                continue
+            videos = rv.json()
+            print(f"   → {len(videos)} videos — đang quét song song...")
+
+            # Fetch all videos in this project concurrently
+            tasks = [fetch_video_captions(client, vid, fetch_sem) for vid in videos]
+            results = await asyncio.gather(*tasks)
+            proj_captions = [cap for batch in results for cap in batch]
+            print(f"   ✅ Project xong: {len(proj_captions)} captions có KB")
+            all_captions.extend(proj_captions)
+
+    unique = {c["id"]: c for c in all_captions}
+    data = list(unique.values())
+    print(f"\n📦 Tổng captions có KB (dedup): {len(data)}")
     return data
 
-def update_caption(token: str, caption_id: str, payload: dict) -> bool:
+# ===================== SYNC UPDATE =====================
+
+def update_caption_sync(token: str, caption_id: str, payload: dict) -> bool:
+    import requests as req
     url = f"{API_URL}/api/annotations/{caption_id}"
-    resp = requests.put(url, headers={"Authorization": f"Bearer {token}"}, json=payload, timeout=30)
+    resp = req.put(url, headers={"Authorization": f"Bearer {token}"}, json=payload, timeout=30)
     if not resp.ok:
-        print(f"❌ Cập nhật thất bại caption {caption_id}: {resp.text}")
+        print(f"❌ Cập nhật thất bại caption {caption_id}: {resp.text[:200]}")
         return False
     return True
 
@@ -207,202 +223,230 @@ TRANSLATE_PROMPT = """Translate the following English text to Vietnamese.
 Keep proper nouns, place names, and brand names as-is.
 Output ONLY the translated Vietnamese text, no explanations."""
 
-async def call_gpt(client, system_prompt, visual_caption, knowledge_text):
-    user_message = f"Visual/Contextual Caption:\n{visual_caption}\n\nKnowledge Base Facts:\n{knowledge_text}"
-    response = await client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
-        temperature=0.4,
-        max_completion_tokens=1000,
-    )
-    tokens = {
-        "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-        "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-    }
-    return response.choices[0].message.content.strip(), tokens
+async def call_gpt_with_retry(
+    client: AsyncOpenAI,
+    messages: list,
+    temperature: float,
+    caption_id: str,
+    step: str,
+    usage_stats: dict,
+    total_lock: asyncio.Lock,
+    request_throttle: asyncio.Lock,
+) -> str | None:
+    """
+    Gọi GPT với:
+    - Throttle delay tối thiểu (MIN_REQUEST_DELAY_S) — tránh TPM spike
+    - Exponential backoff + jitter khi gặp RateLimitError (429)
+    - Xử lý riêng APIStatusError 400 (không retry) vs lỗi khác (retry)
+    """
+    # Throttle: đảm bảo delay tối thiểu giữa các request
+    async with request_throttle:
+        await asyncio.sleep(MIN_REQUEST_DELAY_S)
 
-async def translate_to_vi(client, en_text):
-    response = await client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": TRANSLATE_PROMPT},
-            {"role": "user", "content": en_text},
-        ],
-        temperature=0.2,
-        max_completion_tokens=1000,
-    )
-    tokens = {
-        "prompt_tokens": response.usage.prompt_tokens if response.usage else 0,
-        "completion_tokens": response.usage.completion_tokens if response.usage else 0,
-    }
-    return response.choices[0].message.content.strip(), tokens
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                temperature=temperature,
+                max_completion_tokens=1000,
+            )
+            text = response.choices[0].message.content.strip()
+            usage = response.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+
+            async with total_lock:
+                usage_stats["prompt_tokens"] += input_tokens
+                usage_stats["completion_tokens"] += output_tokens
+
+            print(f"      ✅ {step} [{caption_id[:12]}] | {input_tokens:>5} in / {output_tokens:>4} out tok")
+            return text
+
+        except RateLimitError:
+            # 429 — đợi rồi retry với jitter
+            delay = min(RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), RETRY_MAX_DELAY)
+            print(f"      ⏳ [{caption_id[:12]}] Rate limit ({step}, attempt {attempt+1}/{MAX_RETRIES}), đợi {delay:.1f}s...")
+            await asyncio.sleep(delay)
+
+        except APIStatusError as e:
+            if e.status_code == 400:
+                # Bad request — không retry
+                print(f"      ❌ [{caption_id[:12]}] API Error 400 ({step}): {e.message}")
+                return None
+            # Lỗi 5xx — retry
+            delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+            print(f"      ⏳ [{caption_id[:12]}] API Error {e.status_code} ({step}, attempt {attempt+1}/{MAX_RETRIES}), đợi {delay:.1f}s...")
+            await asyncio.sleep(delay)
+
+        except Exception as e:
+            delay = min(RETRY_BASE_DELAY * (2 ** attempt), RETRY_MAX_DELAY)
+            print(f"      ⏳ [{caption_id[:12]}] Lỗi: {e} ({step}, attempt {attempt+1}/{MAX_RETRIES}), đợi {delay:.1f}s...")
+            await asyncio.sleep(delay)
+
+    # Hết retry
+    print(f"      ❌ [{caption_id[:12]}] Hết {MAX_RETRIES} lần retry ({step})")
+    return None
 
 async def process_caption(
-    client, caption, token, kb_index, all_nodes, 
-    use_category, sem, request_throttle, counter, total_lock, total, usage_stats
+    client: AsyncOpenAI, caption: dict, token: str,
+    kb_index: dict, all_nodes: list,
+    use_category: bool, sem: asyncio.Semaphore,
+    counter: list, total_lock: asyncio.Lock, total: int,
+    usage_stats: dict, request_throttle: asyncio.Lock,
 ):
+    cap_id = caption["id"]
     kb_ids = caption.get("knowledge_base_ids", [])
-    
-    # 1. Build Knowledge Text locally
-    know_en_list = []
-    know_vi_list = []
-    category_hint = "UNKNOWN"
-    
+
+    # Build knowledge text
+    know_en_list, category_hint = [], "UNKNOWN"
     for idx, kb_id in enumerate(kb_ids):
         node = kb_index.get(kb_id)
         if node:
             if idx == 0:
                 category_hint = detect_category(node, all_nodes)
             desc_en = str(node.get("description", "")).strip()
-            desc_vi = str(node.get("description_vi", "")).strip()
-            if desc_en: know_en_list.append(desc_en)
-            if desc_vi: know_vi_list.append(desc_vi)
-            
+            if desc_en:
+                know_en_list.append(desc_en)
+
     know_en = "\n\n".join(know_en_list)
-    know_vi = "\n\n".join(know_vi_list)
+    ctx_en = caption.get("contextual_caption") or caption.get("visual_caption") or ""
+
+    if not ctx_en.strip() or not know_en.strip():
+        return
 
     system_prompt = load_prompt(category_hint, use_category)
 
-    # EN: combine from EN contextual + EN knowledge
-    ctx_en = caption.get("contextual_caption") or caption.get("visual_caption") or ""
-
-    updates = {}
-    combined_en = None
-
     async with sem:
-        # Step 1: Generate English combined caption
-        if ctx_en.strip() and know_en.strip():
-            async with request_throttle:
-                await asyncio.sleep(MIN_REQUEST_DELAY_S)
-            for attempt in range(MAX_RETRIES):
-                try:
-                    combined_en, tokens_en = await call_gpt(client, system_prompt, ctx_en, know_en)
-                    updates["combined_caption"] = combined_en
-                    async with total_lock:
-                        usage_stats["prompt_tokens"] += tokens_en["prompt_tokens"]
-                        usage_stats["completion_tokens"] += tokens_en["completion_tokens"]
-                    break
-                except Exception as e:
-                    if attempt == MAX_RETRIES - 1:
-                        print(f"❌ Lỗi GPT (EN) ở caption {caption['id']}: {e}")
-                    await asyncio.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+        print(f"   🤖 [{cap_id[:12]}] category={category_hint} — sinh EN...")
 
-        # Step 2: Translate EN result to VI (not using VI inputs independently)
-        if combined_en:
-            async with request_throttle:
-                await asyncio.sleep(MIN_REQUEST_DELAY_S)
-            for attempt in range(MAX_RETRIES):
-                try:
-                    combined_vi, tokens_vi = await translate_to_vi(client, combined_en)
-                    updates["combined_caption_vi"] = combined_vi
-                    async with total_lock:
-                        usage_stats["prompt_tokens"] += tokens_vi["prompt_tokens"]
-                        usage_stats["completion_tokens"] += tokens_vi["completion_tokens"]
-                    break
-                except Exception as e:
-                    if attempt == MAX_RETRIES - 1:
-                        print(f"❌ Lỗi dịch (VI) ở caption {caption['id']}: {e}")
-                    await asyncio.sleep(RETRY_BASE_DELAY * (2 ** attempt))
+        # Step 1: Generate EN
+        combined_en = await call_gpt_with_retry(
+            client,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Visual/Contextual Caption:\n{ctx_en}\n\nKnowledge Base Facts:\n{know_en}"},
+            ],
+            temperature=0.4,
+            caption_id=cap_id,
+            step="EN",
+            usage_stats=usage_stats,
+            total_lock=total_lock,
+            request_throttle=request_throttle,
+        )
+        if not combined_en:
+            return
 
-    if updates:
-        # skip_approval_reset=True to preserve video approval status when running in bulk
-        updates["skip_approval_reset"] = True
-        success = update_caption(token, caption["id"], updates)
-        if success:
-            async with total_lock:
-                counter[0] += 1
-                done = counter[0]
-            print(f"  [{done:>3}/{total}] ✅ Đã cập nhật caption {caption['id']}")
+        # Step 2: Translate EN → VI
+        print(f"   🌐 [{cap_id[:12]}] — dịch VI...")
+        combined_vi = await call_gpt_with_retry(
+            client,
+            messages=[
+                {"role": "system", "content": TRANSLATE_PROMPT},
+                {"role": "user", "content": combined_en},
+            ],
+            temperature=0.2,
+            caption_id=cap_id,
+            step="VI",
+            usage_stats=usage_stats,
+            total_lock=total_lock,
+            request_throttle=request_throttle,
+        )
 
-import time
+    # Update API in thread executor (non-blocking)
+    payload = {
+        "combined_caption": combined_en,
+        "combined_caption_vi": combined_vi or "",
+        "skip_approval_reset": True,
+    }
+    loop = asyncio.get_event_loop()
+    success = await loop.run_in_executor(None, update_caption_sync, token, cap_id, payload)
+    if success:
+        async with total_lock:
+            counter[0] += 1
+            done = counter[0]
+        print(f"  [{done:>4}/{total}] ✅ {cap_id[:12]}")
+
+# ===================== MAIN =====================
 
 async def amain(args):
     start_time = time.time()
-    print("🔄 Đang chuẩn bị dữ liệu...")
-    token = login()
-    all_nodes = fetch_kb_nodes(token)
-    kb_index = {n["id"]: n for n in all_nodes if "id" in n}
 
-    captions = fetch_bulk_targets(token)
-    
-    # Filter only those that have visual/contextual caption
-    valid_captions = []
-    for c in captions:
-        has_ctx_en = bool(c.get("contextual_caption") or c.get("visual_caption"))
-        has_ctx_vi = bool(c.get("contextual_caption_vi") or c.get("visual_caption_vi"))
-        
-        # We already filtered captions to only those having knowledge_base_ids
-        if has_ctx_en or has_ctx_vi:
-            valid_captions.append(c)
-            
-    print(f"🎯 Có {len(valid_captions)} captions đủ điều kiện (có visual/contextual + knowledge).")
+    print("🔐 Đang đăng nhập...")
+    import requests as req
+    r = req.post(f"{API_URL}/api/auth/login", json={"username": USERNAME, "password": PASSWORD}, timeout=30)
+    r.raise_for_status()
+    token = r.json().get("token") or r.json().get("access_token")
+    print(f"✅ Đăng nhập thành công: {USERNAME}")
+
+    print("\n📥 Đang tải KB nodes...")
+    rk = req.get(f"{API_URL}/api/knowledge-base?tree=false", headers={"Authorization": f"Bearer {token}"}, timeout=60)
+    rk.raise_for_status()
+    all_nodes = rk.json()
+    kb_index = {n["id"]: n for n in all_nodes if "id" in n}
+    print(f"✅ {len(all_nodes)} KB nodes")
+
+    print("\n🔍 Đang thu thập captions có KB (async, song song)...")
+    captions = await fetch_bulk_targets_async(token)
+
+    valid = [c for c in captions if (c.get("contextual_caption") or c.get("visual_caption"))]
+    print(f"🎯 {len(valid)} captions đủ điều kiện")
 
     if args.limit:
-        valid_captions = valid_captions[:args.limit]
-        print(f"⚠️ Giới hạn chạy {args.limit} captions.")
+        valid = valid[:args.limit]
+        print(f"⚠️  Giới hạn thử {args.limit} captions")
 
-    if not valid_captions:
-        print("✅ Xong.")
+    if not valid:
+        print("✅ Không có gì cần cập nhật.")
         return
 
     client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     sem = asyncio.Semaphore(args.workers)
-    request_throttle = asyncio.Lock()
+    request_throttle = asyncio.Lock()  # delay tối thiểu giữa các request
     counter = [0]
     total_lock = asyncio.Lock()
-    total = len(valid_captions)
+    total = len(valid)
     usage_stats = {"prompt_tokens": 0, "completion_tokens": 0}
 
+    print(f"\n🚀 Bắt đầu sinh caption với {args.workers} workers song song...\n")
     tasks = [
-        process_caption(
-            client, cap, token, kb_index, all_nodes, 
-            args.use_category_prompts, sem, request_throttle, 
-            counter, total_lock, total, usage_stats
-        )
-        for cap in valid_captions
+        process_caption(client, cap, token, kb_index, all_nodes, args.use_category_prompts, sem, counter, total_lock, total, usage_stats, request_throttle)
+        for cap in valid
     ]
-    
-    print("\n🚀 Bắt đầu gọi GPT và cập nhật...")
     await asyncio.gather(*tasks)
-    
+
+    # Token Usage Report
     elapsed = time.time() - start_time
-    total_input_tokens = usage_stats["prompt_tokens"]
-    total_output_tokens = usage_stats["completion_tokens"]
-    PRICE_INPUT_PER_1M = 0.150
-    PRICE_OUTPUT_PER_1M = 0.600
-    cost_input = (total_input_tokens / 1_000_000) * PRICE_INPUT_PER_1M
-    cost_output = (total_output_tokens / 1_000_000) * PRICE_OUTPUT_PER_1M
-    total_cost = cost_input + cost_output
+    ti, to = usage_stats["prompt_tokens"], usage_stats["completion_tokens"]
+    PRICE_IN, PRICE_OUT = 0.150, 0.600
+    cost = (ti / 1_000_000) * PRICE_IN + (to / 1_000_000) * PRICE_OUT
     throughput = counter[0] / (elapsed / 60) if elapsed > 0 else 0
 
     print("\n" + "=" * 52)
     print("         ====== TOKEN USAGE REPORT ======")
     print("=" * 52)
     print(f"   Model             : {OPENAI_MODEL}")
-    print(f"   Workers parallel  : {args.workers}")
-    print(f"   Elapsed time      : {elapsed:.1f}s ({elapsed/60:.1f} phút)")
+    print(f"   Workers           : {args.workers}")
+    print(f"   Elapsed           : {elapsed:.1f}s ({elapsed/60:.1f} phút)")
     print(f"   Throughput        : {throughput:.1f} captions/phút")
     print("   " + "-" * 48)
     print(f"   Captions updated  : {counter[0]}/{total}")
     print("   " + "-" * 48)
-    print(f"   Input tokens      : {total_input_tokens:>10,}")
-    print(f"   Output tokens     : {total_output_tokens:>10,}")
-    print(f"   TOTAL tokens      : {total_input_tokens + total_output_tokens:>10,}")
+    print(f"   Input tokens      : {ti:>10,}")
+    print(f"   Output tokens     : {to:>10,}")
+    print(f"   TOTAL tokens      : {ti+to:>10,}")
     print("   " + "-" * 48)
-    print(f"   Cost input        : ${cost_input:>8.4f}")
-    print(f"   Cost output       : ${cost_output:>8.4f}")
-    print(f"   TOTAL COST (USD)  : ${total_cost:>8.4f}")
-    print(f"   (Giá: ${PRICE_INPUT_PER_1M}/1M in · ${PRICE_OUTPUT_PER_1M}/1M out)")
+    print(f"   TOTAL COST (USD)  : ${cost:>8.4f}")
+    print(f"   (${PRICE_INPUT_PER_1M}/1M in · ${PRICE_OUTPUT_PER_1M}/1M out)")
     print("=" * 52)
     print("\n✅ Hoàn tất!")
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=None, help="Số lượng caption test tối đa")
-    parser.add_argument("--workers", type=int, default=5, help="Số lượng concurrent request")
-    parser.add_argument("--use-category-prompts", action="store_true", help="Bật để kết hợp 12 loại prompt")
+    parser.add_argument("--limit", type=int, default=None, help="Số captions test tối đa")
+    parser.add_argument("--workers", type=int, default=8, help="Số GPT requests song song (default: 8)")
+    parser.add_argument("--use-category-prompts", action="store_true", help="Kết hợp 12 loại prompt theo danh mục")
     args = parser.parse_args()
 
     if not OPENAI_API_KEY:

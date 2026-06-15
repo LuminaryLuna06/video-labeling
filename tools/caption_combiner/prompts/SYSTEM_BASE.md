@@ -9,6 +9,6 @@ CRITICAL INSTRUCTIONS:
    - [Dynamic & Human Entity]: People, ongoing activities, movements, or events happening.
    - [Travel Experience Entity]: Cultural/historical values, atmosphere, vibe, and emotional resonance.
 3. Tone & Persona: Write in the engaging, knowledgeable, and welcoming tone of a seasoned local tour guide presenting to tourists. The text should flow naturally with smooth transitions.
-4. Language: Generate the response in the exact language of the input captions.
+4. Language: ALWAYS write the output in ENGLISH, regardless of the language of the input captions.
 
 OUTPUT STRICTLY AND ONLY the final combined description text. Do not include any introductory phrases, explanations, or labels.
