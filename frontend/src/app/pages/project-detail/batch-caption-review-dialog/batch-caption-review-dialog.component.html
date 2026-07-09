@@ -23,10 +23,27 @@
 
     <pre *ngIf="showRawJson" class="raw-json">{{ previewJson }}</pre>
 
+    <div class="filter-row" *ngIf="!showRawJson">
+      <mat-form-field appearance="outline" class="video-filter-field">
+        <mat-label>Filter by Video</mat-label>
+        <mat-select [(ngModel)]="selectedVideoId" (selectionChange)="onVideoFilterChange()">
+          <mat-option value="all">All Videos</mat-option>
+          <mat-option *ngFor="let video of uniqueVideos" [value]="video.id">
+            {{ video.name }}
+          </mat-option>
+        </mat-select>
+      </mat-form-field>
+      <div class="filter-actions">
+        <button mat-button (click)="selectAllVisible()">Select All Visible</button>
+        <button mat-button (click)="deselectAllVisible()">Deselect All Visible</button>
+      </div>
+    </div>
+
     <table *ngIf="!showRawJson" class="preview-table">
       <thead>
         <tr>
           <th></th>
+          <th>Video</th>
           <th>Segment</th>
           <th>Object</th>
           <th>Current caption (EN)</th>
@@ -34,8 +51,9 @@
         </tr>
       </thead>
       <tbody>
-        <tr *ngFor="let item of preview.items">
+        <tr *ngFor="let item of filteredItems">
           <td><mat-checkbox [checked]="isSelected(item.caption_id)" (change)="toggleItem(item.caption_id)"></mat-checkbox></td>
+          <td>{{ item.video_name }}</td>
           <td>{{ item.segment_name }}</td>
           <td>{{ item.object_label }}</td>
           <td>{{ item.current_visual_caption }}</td>

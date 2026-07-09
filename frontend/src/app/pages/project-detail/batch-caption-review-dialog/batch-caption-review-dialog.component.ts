@@ -33,6 +33,11 @@ export class BatchCaptionReviewDialogComponent implements OnDestroy {
   selected = new Set<string>();
   showRawJson = false;
 
+  // Video filtering
+  selectedVideoId = 'all';
+  uniqueVideos: { id: string; name: string }[] = [];
+  filteredItems: any[] = [];
+
   apiKey = '';
   model = 'gemini-2.5-flash';
   starting = false;
@@ -52,6 +57,18 @@ export class BatchCaptionReviewDialogComponent implements OnDestroy {
       next: (res) => {
         this.preview = res;
         this.selected = new Set(res.items.map(i => i.caption_id));
+        
+        // Extract unique videos
+        const videoMap = new Map<string, string>();
+        res.items.forEach(item => {
+          if (item.video_id) {
+            videoMap.set(item.video_id, item.video_name || 'Unnamed Video');
+          }
+        });
+        this.uniqueVideos = Array.from(videoMap.entries()).map(([id, name]) => ({ id, name }));
+        
+        this.selectedVideoId = 'all';
+        this.filteredItems = res.items;
         this.step = 'preview';
         this.loadingPreview = false;
       },
@@ -59,6 +76,27 @@ export class BatchCaptionReviewDialogComponent implements OnDestroy {
         this.loadingPreview = false;
         this.snackBar.open('Failed to generate preview: ' + err.message, 'Close', { duration: 4000 });
       }
+    });
+  }
+
+  onVideoFilterChange(): void {
+    if (!this.preview) return;
+    if (this.selectedVideoId === 'all') {
+      this.filteredItems = this.preview.items;
+    } else {
+      this.filteredItems = this.preview.items.filter(i => i.video_id === this.selectedVideoId);
+    }
+  }
+
+  selectAllVisible(): void {
+    this.filteredItems.forEach(item => {
+      this.selected.add(item.caption_id);
+    });
+  }
+
+  deselectAllVisible(): void {
+    this.filteredItems.forEach(item => {
+      this.selected.delete(item.caption_id);
     });
   }
 
