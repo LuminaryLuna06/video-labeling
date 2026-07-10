@@ -293,8 +293,11 @@ def _run_batch_review(app, task_id, item_ids, gemini_api_key, gemini_model):
 
     with app.app_context():
         db = current_app.db
+        # Only promote pending -> running: if the user cancelled before this
+        # thread got scheduled, the doc is already 'cancelled' and must stay
+        # that way (the loop's first _task_cancelled check then exits).
         db.caption_review_tasks.update_one(
-            {'_id': task_id},
+            {'_id': task_id, 'status': 'pending'},
             {'$set': {'status': 'running', 'updated_at': datetime.now(timezone.utc)}}
         )
 
