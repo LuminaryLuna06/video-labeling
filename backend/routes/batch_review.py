@@ -478,6 +478,48 @@ def batch_review_status(task_id):
     return jsonify(_serialize_task(task)), 200
 
 
+@batch_review_bp.route('/batch-review/cancel', methods=['POST'])
+@token_required
+def batch_review_cancel():
+    """Flip a pending/running task to 'cancelled'.
+
+    Works whether or not the worker thread is still alive: a live worker
+    exits at its next check; a dead/stuck task only needs the doc flipped so
+    the 409 gate in batch_review_apply stops matching it. Cancelling an
+    already-finished task is an idempotent no-op.
+    """
+    data = request.get_json() or {}
+    task_id = data.get('task_id')
+    if not task_id:
+        return jsonify({'error': 'task_id is required'}), 400
+
+    db = current_app.db
+    db.caption_review_tasks.update_one(
+        {'_id': task_id, 'status': {'$in': ['pending', 'running']}},
+        {'$set': {'status': 'cancelled', 'updated_at': datetime.now(timezone.utc)}}
+    )
+
+    task = db.caption_review_tasks.find_one({'_id': task_id})
+    if not task:
+        return jsonify({'error': 'Task not found'}), 404
+    return jsonify(_serialize_task(task)), 200
+
+
+@batch_review_bp.route('/batch-review/active', methods=['GET'])
+@token_required
+def batch_review_active():
+    """Return the project's currently pending/running task, or null."""
+    project_id = request.args.get('project_id')
+    if not project_id:
+        return jsonify({'error': 'project_id is required'}), 400
+
+    task = current_app.db.caption_review_tasks.find_one({
+        'project_id': project_id,
+        'status': {'$in': ['pending', 'running']},
+    })
+    return jsonify({'task': _serialize_task(task) if task else None}), 200
+
+
 @batch_review_bp.route('/batch-review/confirm', methods=['POST'])
 @token_required
 def batch_review_confirm():
