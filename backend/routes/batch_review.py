@@ -243,7 +243,7 @@ def _task_cancelled(db, task_id):
     return bool(doc) and doc.get('status') == 'cancelled'
 
 
-def _call_gemini_with_retry(model, prompt, caption_id, db, task_id):
+def _call_gemini_with_retry(client, model_name, prompt, caption_id, db, task_id):
     """Call Gemini with a minimum request delay + exponential backoff on rate
     limits, mirroring tools/caption_combiner's call_gpt_with_retry.
 
@@ -255,7 +255,7 @@ def _call_gemini_with_retry(model, prompt, caption_id, db, task_id):
 
     for attempt in range(MAX_RETRIES):
         try:
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(model=model_name, contents=prompt)
             return (getattr(response, 'text', '') or '').strip(), False
         except Exception as e:
             message = str(e)
@@ -289,7 +289,7 @@ def _call_gemini_with_retry(model, prompt, caption_id, db, task_id):
 
 
 def _run_batch_review(app, task_id, item_ids, gemini_api_key, gemini_model):
-    import google.generativeai as genai
+    from google import genai
 
     with app.app_context():
         db = current_app.db
@@ -302,8 +302,7 @@ def _run_batch_review(app, task_id, item_ids, gemini_api_key, gemini_model):
         )
 
         try:
-            genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel(gemini_model)
+            client = genai.Client(api_key=gemini_api_key)
 
             for index, caption_id in enumerate(item_ids):
                 if _task_cancelled(db, task_id):
@@ -357,7 +356,7 @@ def _run_batch_review(app, task_id, item_ids, gemini_api_key, gemini_model):
                     })
 
                     prompt = _build_review_prompt(ground_truth_name, segment_name, current_caption)
-                    text, is_auth_error = _call_gemini_with_retry(model, prompt, caption_id, db, task_id)
+                    text, is_auth_error = _call_gemini_with_retry(client, gemini_model, prompt, caption_id, db, task_id)
 
                     if is_auth_error and index == 0:
                         db.caption_review_tasks.update_one(
