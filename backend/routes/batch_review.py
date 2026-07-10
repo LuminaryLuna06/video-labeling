@@ -236,12 +236,20 @@ def _serialize_task(task):
     }
 
 
-def _call_gemini_with_retry(model, prompt, caption_id):
+def _task_cancelled(db, task_id):
+    """True if the task doc has been flipped to 'cancelled' by the cancel
+    endpoint. The worker polls this between items and between retry sleeps."""
+    doc = db.caption_review_tasks.find_one({'_id': task_id}, {'status': 1})
+    return bool(doc) and doc.get('status') == 'cancelled'
+
+
+def _call_gemini_with_retry(model, prompt, caption_id, db, task_id):
     """Call Gemini with a minimum request delay + exponential backoff on rate
     limits, mirroring tools/caption_combiner's call_gpt_with_retry.
 
-    Returns (text, is_auth_error). text is None if every retry failed or the
-    error was non-retryable; is_auth_error is True for an invalid/rejected key.
+    Returns (text, is_auth_error). text is None if every retry failed, the
+    error was non-retryable, or the task was cancelled mid-retry;
+    is_auth_error is True for an invalid/rejected key.
     """
     time.sleep(MIN_REQUEST_DELAY_S)
 
@@ -258,6 +266,12 @@ def _call_gemini_with_retry(model, prompt, caption_id):
             )
             if is_auth_error:
                 return None, True
+
+            # Don't sit in a long backoff sleep for a task the user has
+            # already cancelled — bail out before sleeping.
+            if _task_cancelled(db, task_id):
+                logger.info(f"[BatchReview] task {task_id} cancelled during retries for {caption_id}")
+                return None, False
 
             is_rate_limited = '429' in message or 'RATE_LIMIT' in upper or 'RESOURCE_EXHAUSTED' in upper
             if is_rate_limited:
@@ -289,6 +303,10 @@ def _run_batch_review(app, task_id, item_ids, gemini_api_key, gemini_model):
             model = genai.GenerativeModel(gemini_model)
 
             for index, caption_id in enumerate(item_ids):
+                if _task_cancelled(db, task_id):
+                    logger.info(f"[BatchReview] task {task_id} cancelled after {index} of {len(item_ids)} items")
+                    return
+
                 try:
                     caption = db.captions.find_one({'_id': ObjectId(caption_id)})
                 except Exception:
@@ -336,7 +354,7 @@ def _run_batch_review(app, task_id, item_ids, gemini_api_key, gemini_model):
                     })
 
                     prompt = _build_review_prompt(ground_truth_name, segment_name, current_caption)
-                    text, is_auth_error = _call_gemini_with_retry(model, prompt, caption_id)
+                    text, is_auth_error = _call_gemini_with_retry(model, prompt, caption_id, db, task_id)
 
                     if is_auth_error and index == 0:
                         db.caption_review_tasks.update_one(
@@ -380,7 +398,7 @@ def _run_batch_review(app, task_id, item_ids, gemini_api_key, gemini_model):
                 )
 
             db.caption_review_tasks.update_one(
-                {'_id': task_id, 'status': {'$ne': 'failed'}},
+                {'_id': task_id, 'status': {'$nin': ['failed', 'cancelled']}},
                 {'$set': {'status': 'completed', 'updated_at': datetime.now(timezone.utc)}}
             )
         except Exception as e:
