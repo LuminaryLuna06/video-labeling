@@ -2619,6 +2619,7 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
       if (result && result.updated) {
         if (result.globalKBIds) {
           (this.video as any).knowledge_base_ids = result.globalKBIds;
+          this.videoService.updateVideo(this.video.id, { knowledge_base_ids: result.globalKBIds } as any).subscribe();
         }
 
         // Sync selected segment if active
