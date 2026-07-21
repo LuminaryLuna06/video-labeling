@@ -26,6 +26,7 @@ import { KnowledgeBaseService } from '../../core/services/knowledge-base.service
 import { NavigationHistoryService } from '../../core/services/navigation-history.service';
 import { DamService } from '../../core/services/dam.service';
 import { SettingsDialogComponent } from '../settings-dialog/settings-dialog.component';
+import { BatchKnowledgeDialogComponent } from '../batch-knowledge-dialog/batch-knowledge-dialog.component';
 import { KnowledgeBaseSelectorComponent } from '../../core/components/knowledge-base-selector/knowledge-base-selector.component';
 import { VideoItem, VideoSegment, ObjectRegion, Caption, Category } from '../../core/models';
 import { normalizeCuts, keepRanges, CutRange } from '../../core/utils/cut-ranges';
@@ -39,7 +40,7 @@ import { forkJoin } from 'rxjs';
     MatButtonModule, MatIconModule, MatSliderModule, MatFormFieldModule,
     MatInputModule, MatSelectModule, MatSnackBarModule, MatProgressSpinnerModule,
     MatTooltipModule, MatMenuModule, MatTabsModule, MatProgressBarModule, MatDialogModule,
-    KnowledgeBaseSelectorComponent
+    KnowledgeBaseSelectorComponent, BatchKnowledgeDialogComponent
   ],
   templateUrl: './video-editor.component.html',
   styleUrls: ['./video-editor.component.scss']
@@ -2599,6 +2600,47 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         knowledge_relevance: 0
       };
     }
+  }
+
+  openBatchKnowledgeDialog(): void {
+    if (!this.video) return;
+
+    const dialogRef = this.dialog.open(BatchKnowledgeDialogComponent, {
+      width: '640px',
+      data: {
+        video: this.video,
+        segments: this.segments || [],
+        regions: this.regions || [],
+        regionCaptionCache: this.regionCaptionCache || {}
+      }
+    });
+
+    dialogRef.afterClosed().subscribe(result => {
+      if (result && result.updated) {
+        if (result.globalKBIds) {
+          (this.video as any).knowledge_base_ids = result.globalKBIds;
+        }
+
+        // Sync selected segment if active
+        if (this.selectedSegment && (this.selectedSegment as any).caption) {
+          this.segmentCaptionKBIds = this.normalizeKbIds((this.selectedSegment as any).caption.knowledge_base_ids || []);
+          this.saveSegmentCaption();
+        }
+
+        // Sync selected region if active
+        if (this.selectedRegion) {
+          if (this.selectedRegion.caption) {
+            this.captionKBIds = this.normalizeKbIds(this.selectedRegion.caption.knowledge_base_ids || []);
+            this.saveCaption();
+          }
+          if (this.selectedRegion.label) {
+            this.currentRegionLabel = this.selectedRegion.label;
+          }
+        }
+
+        this.snackBar.open('Batch updates applied successfully!', 'OK', { duration: 3000, panelClass: 'snack-success' });
+      }
+    });
   }
 
   getStarArray(): number[] {
