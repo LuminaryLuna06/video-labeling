@@ -192,6 +192,31 @@ export class BatchKnowledgeDialogComponent implements OnInit {
   }
 
   saveAndClose(): void {
+    // Auto-apply segment KB selection if user picked items in dropdown
+    if (this.segmentKBIds.length > 0 && Array.isArray(this.data.segments)) {
+      this.data.segments.forEach(seg => {
+        if (!seg.caption) seg.caption = {};
+        seg.caption.knowledge_base_ids = Array.from(new Set([
+          ...(seg.caption.knowledge_base_ids || []),
+          ...this.segmentKBIds
+        ]));
+      });
+    }
+
+    // Auto-apply object track KB selection if user picked items in dropdown
+    if (this.objectKBIds.length > 0 && Array.isArray(this.data.regions)) {
+      this.data.regions.forEach(reg => {
+        if (!reg.caption) reg.caption = {};
+        reg.caption.knowledge_base_ids = Array.from(new Set([
+          ...(reg.caption.knowledge_base_ids || []),
+          ...this.objectKBIds
+        ]));
+        if (this.data.regionCaptionCache && this.data.regionCaptionCache[reg.id]) {
+          this.data.regionCaptionCache[reg.id].kbIds = [...reg.caption.knowledge_base_ids];
+        }
+      });
+    }
+
     this.dialogRef.close({
       updated: true,
       globalKBIds: this.globalKBIds,

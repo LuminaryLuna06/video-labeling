@@ -2628,22 +2628,24 @@ export class VideoEditorComponent implements OnInit, AfterViewInit, OnDestroy {
         // 2. Batch Save ALL Segments (Names & KB IDs)
         if (Array.isArray(result.segments)) {
           result.segments.forEach(seg => {
-            if (seg.id && seg.name) {
-              saveTasks.push(this.videoService.updateSegment(seg.id, { name: seg.name }));
-            }
-            if (seg.id && seg.caption && Array.isArray(seg.caption.knowledge_base_ids)) {
-              const segCaptionData = {
-                segment_id: seg.id,
-                video_id: this.video!.id,
-                contextual_caption: seg.caption.contextual_caption || '',
-                knowledge_caption: seg.caption.knowledge_caption || '',
-                combined_caption: seg.caption.combined_caption || '',
-                contextual_caption_vi: seg.caption.contextual_caption_vi || '',
-                knowledge_caption_vi: seg.caption.knowledge_caption_vi || '',
-                combined_caption_vi: seg.caption.combined_caption_vi || '',
-                knowledge_base_ids: seg.caption.knowledge_base_ids
-              };
-              saveTasks.push(this.videoService.saveCaption(segCaptionData));
+            if (seg.id) {
+              const segKbIds = seg.caption?.knowledge_base_ids || [];
+              saveTasks.push(this.videoService.updateSegment(seg.id, { name: seg.name, knowledge_base_ids: segKbIds } as any));
+
+              if (seg.caption) {
+                const segCaptionData = {
+                  segment_id: seg.id,
+                  video_id: this.video!.id,
+                  contextual_caption: seg.caption.contextual_caption || '',
+                  knowledge_caption: seg.caption.knowledge_caption || '',
+                  combined_caption: seg.caption.combined_caption || '',
+                  contextual_caption_vi: seg.caption.contextual_caption_vi || '',
+                  knowledge_caption_vi: seg.caption.knowledge_caption_vi || '',
+                  combined_caption_vi: seg.caption.combined_caption_vi || '',
+                  knowledge_base_ids: segKbIds
+                };
+                saveTasks.push(this.videoService.saveCaption(segCaptionData));
+              }
             }
           });
         }
