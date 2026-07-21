@@ -70,17 +70,17 @@
           <div class="section-block">
             <h3><mat-icon class="sec-icon">edit_note</mat-icon> Batch Rename Segments</h3>
             <p class="tab-desc">
-              Enter a base name (e.g. "Scene" or "Segment") to sequentially rename all segments (e.g. "Scene 1", "Scene 2").
+              Enter a name (e.g. "Scene" or "Segment") to rename all segments at once.
             </p>
 
             <mat-form-field appearance="outline" class="full-width">
-              <mat-label>New Segment Base Name</mat-label>
+              <mat-label>New Segment Name</mat-label>
               <input matInput [(ngModel)]="batchSegmentName" placeholder="e.g. Scene, Segment, Clip" />
             </mat-form-field>
 
             <div class="action-buttons-group">
               <button mat-raised-button color="accent" (click)="renameAllSegments()" [disabled]="!batchSegmentName.trim()">
-                <mat-icon>format_list_numbered</mat-icon> Rename All Segments (Base Name + Number)
+                <mat-icon>edit</mat-icon> Set Name for All Segments
               </button>
             </div>
           </div>

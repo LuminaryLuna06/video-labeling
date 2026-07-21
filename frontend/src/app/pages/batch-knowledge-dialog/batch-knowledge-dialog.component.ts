@@ -160,19 +160,19 @@ export class BatchKnowledgeDialogComponent implements OnInit {
   }
 
   renameAllSegments(): void {
-    const baseName = this.batchSegmentName.trim();
-    if (!baseName) return;
+    const name = this.batchSegmentName.trim();
+    if (!name) return;
 
     if (!this.data.segments || !this.data.segments.length) {
       this.snackBar.open('No segments available to rename.', 'OK', { duration: 3000 });
       return;
     }
 
-    this.data.segments.forEach((seg, idx) => {
-      seg.name = `${baseName} ${idx + 1}`;
+    this.data.segments.forEach(seg => {
+      seg.name = name;
     });
 
-    this.snackBar.open(`Renamed ${this.data.segments.length} segment(s) to "${baseName} 1..${this.data.segments.length}".`, 'OK', { duration: 3000 });
+    this.snackBar.open(`Renamed ${this.data.segments.length} segment(s) to "${name}".`, 'OK', { duration: 3000 });
   }
 
   renameAllObjects(withNumbering: boolean = false): void {
